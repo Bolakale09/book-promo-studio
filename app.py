@@ -566,15 +566,31 @@ def tab_render(b: dict) -> None:
         (config.MUSIC_DIR / Path(up.name).name).write_bytes(up.getbuffer())
         st.rerun()
 
-    est = render.estimate(b, v)
+    st.markdown("**🔍 AI quality check**")
+    q1, q2 = st.columns(2)
+    quality = q1.toggle("Check every AI shot and look through the finished video", True,
+                        help="A vision AI inspects each AI photo/clip for warped hands or faces, garbled text, "
+                             "melting objects and a character who doesn't match. Bad shots are re-made with a "
+                             "better prompt. Then it looks through the whole video and re-does any scene that "
+                             "still looks off before the final file is made. About $0.005 per check.")
+    video_retries = q2.selectbox("Re-make a flawed AI video clip up to", [0, 1, 2], 1, disabled=not quality,
+                                 format_func=lambda n: f"{n} time(s)" + ("" if n == 0 else
+                                                       f" (~{money(budget.video_cost(config.VIDEO_MODEL, 5))} each)"),
+                                 help="Photos are re-made up to 2 times (cheap). Video re-makes cost more.")
+
+    est = render.estimate(b, v, quality)
     left = budget.remaining()
+    qa_part = f" · quality check {money(est['quality_check'])}" if quality else ""
     st.markdown(f"**Estimated cost:** up to {money(est['total'])} (voice {money(est['voice'])} · AI photos "
-                f"{money(est['images'])} · AI video {money(est['ai_video'])}) · **Budget left:** {money(left)}  \n"
-                "_Images and clips already made for this book are reused for free._")
+                f"{money(est['images'])} · AI video {money(est['ai_video'])}{qa_part}) · "
+                f"**Budget left:** {money(left)}  \n"
+                "_Images and clips already made for this book are reused for free. Re-makes of flawed shots are "
+                "extra and only happen when needed._")
     busy = any(s["state"] in ("queued", "running") for s in jobs.recent(b["id"], 3))
     if st.button("🎬 Render video", type="primary", disabled=busy or est["total"] > left):
         opts = {"voice_name": vname, "captions": captions, "music": str(music) if music else None,
-                "music_volume": vol, "page_sound": page_sound}
+                "music_volume": vol, "page_sound": page_sound, "quality_check": quality,
+                "video_retries": video_retries}
         jobs.start(b["id"], v, opts)
         st.toast("Rendering started - this takes a few minutes on this PC.")
         time.sleep(1)
@@ -584,6 +600,26 @@ def tab_render(b: dict) -> None:
 
 
 # ---- tab 6: videos + winners -----------------------------------------------------------------
+
+def quality_report(q: dict | None) -> None:
+    if not q:
+        return
+    shots, final = q.get("shots") or [], q.get("final") or {}
+    fixed = sum(1 for s in shots if s.get("fixed")) + len(final.get("remade") or [])
+    scores = [s.get("final_score", 0) for s in shots] + list((final.get("scores") or {}).values())
+    low = min(scores) if scores else None
+    with st.expander(f"🔍 Quality check: {len(shots)} AI shot(s) checked · {fixed} fixed"
+                     + (f" · lowest score {low}/10" if low is not None else "")):
+        if final.get("summary"):
+            st.markdown(f"**Final look-through:** {final['summary']}")
+        for s in shots:
+            takes = s.get("takes", [])
+            line = " → ".join(f"{t['score']}/10" for t in takes)
+            probs = "; ".join(p for t in takes[:-1] for p in t.get("problems", [])[:2])
+            st.markdown(f"- **{s['scene']}** ({s['kind']}): {line}" + (f" - fixed: _{probs}_" if probs else ""))
+        for rm in final.get("remade") or []:
+            st.markdown(f"- **Scene {rm['scene']}** re-made after the final check: _{'; '.join(rm['problems'][:3])}_")
+
 
 def tab_videos(b: dict) -> None:
     st.subheader("📂 My videos")
@@ -603,6 +639,7 @@ def tab_videos(b: dict) -> None:
                 st.markdown(f"**{v.get('name')}** · {r['seconds']}s · cost {money(r.get('cost', 0))} · {r['created']}")
                 for w in r.get("warnings", []):
                     st.caption(f"⚠ {w}")
+                quality_report(r.get("quality"))
                 st.code(f"{v.get('post_caption', '')}\n\n{' '.join(v.get('hashtags', []))}", language=None)
                 if Path(r["path"]).exists():
                     st.download_button("⬇ Download MP4", Path(r["path"]).read_bytes(),

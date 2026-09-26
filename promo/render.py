@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from . import book as bk, budget, config, ffmpeg_utils as ff, visuals, voice
+from . import book as bk, budget, config, ffmpeg_utils as ff, qa, visuals, voice
 from .genres import GENRES
 from .transcribe import align_words
 
@@ -621,7 +621,7 @@ def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets
     return t, clips, words_all
 
 
-def estimate(book: dict, variant: dict) -> dict:
+def estimate(book: dict, variant: dict, quality_check: bool = True) -> dict:
     """Upper-bound cost of rendering (already-made images/clips are reused for free)."""
     g = GENRES[book["genre"]]
     scenes = variant.get("scenes", [])
@@ -638,6 +638,10 @@ def estimate(book: dict, variant: dict) -> dict:
         "images": n_img * budget.image_cost(config.IMAGE_MODEL, config.IMAGE_QUALITY),
         "ai_video": budget.video_cost(config.VIDEO_MODEL, vid_secs) if vid_secs else 0.0,
     }
+    if quality_check:  # vision checks (~$0.005 each) + the final look-through; re-makes only happen if needed
+        n_ai = sum(1 for s in scenes if s.get("visual") in AI_KINDS)
+        n_ai += 0 if config.PEXELS_API_KEY else sum(1 for s in scenes if s.get("visual") == "stock")
+        out["quality_check"] = 0.005 * n_ai + 0.01
     out["total"] = round(sum(out.values()), 3)
     return out
 
@@ -647,9 +651,16 @@ def _broll_clips(book: dict) -> list[Path]:
     return sorted(p for p in d.glob("*") if p.suffix.lower() in (".mp4", ".mov", ".m4v", ".webm")) if d.exists() else []
 
 
-def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path, warn, progress):
+AI_KINDS = ("ai_image", "character", "ai_video")
+
+
+def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path, warn, progress,
+                 check: bool = False, image_tries: int = 2, video_tries: int = 1, reports: list | None = None):
+    """Make the picture for one scene. With `check`, every AI shot is reviewed and re-made until it looks real."""
     vis, dur = s.get("visual", "cover"), s["dur"]
     seed = seed_for(book["id"], idx, s.get("prompt", ""), s.get("page", ""))
+    label = f"Scene {idx + 1}"
+    s["_asset"], s["_kind"] = None, vis
     try:
         if vis in ("page", "flip"):
             flips = int(s.get("flips") if s.get("flips") not in (None, "") else (4 if vis == "flip" else 1))
@@ -661,27 +672,48 @@ def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path,
             if clips:
                 pick = next((c for c in clips if c.name == s.get("broll")), clips[idx % len(clips)])
                 return VideoScene(pick, dur)
-            warn(f"Scene {idx + 1}: no B-roll uploaded, using an AI photo instead.")
+            warn(f"{label}: no B-roll uploaded, using an AI photo instead.")
             vis = "ai_image"
         if vis == "stock":
             clip = visuals.stock_video(s.get("stock_query") or s.get("prompt") or "reading book", assets,
-                                       min_seconds=min(dur, 5))
+                                       min_seconds=min(dur, 5), skip=s.get("_stock_skip", 0))
             if clip:
+                s["_asset"], s["_kind"] = clip, "stock"
                 return VideoScene(clip, dur)
-            warn(f"Scene {idx + 1}: no stock clip found (add a free PEXELS_API_KEY), using an AI photo instead.")
+            warn(f"{label}: no stock clip found (add a free PEXELS_API_KEY), using an AI photo instead.")
             vis = "ai_image"
-        prompt = s.get("prompt") or s.get("stock_query") or s.get("overlay") or book["title"]
+        prompt = s.get("_fixed_prompt") or s.get("prompt") or s.get("stock_query") or s.get("overlay") or book["title"]
         refs: list[Path] = []
-        if s.get("character"):
+        if s.get("character") and not s.get("_fixed_prompt"):
             prompt, refs = visuals.character_prompt(book, s["character"], prompt)
+        elif s.get("character"):
+            refs = visuals.character_prompt(book, s["character"], "")[1]
+        base = s.get("_take", 0)
+
+        def shot(gen, kind, tries, what):
+            if not check:
+                return gen(prompt, 0)
+            path, report = qa.best_of(gen, prompt, kind, refs, tries, f"{label} {what}".strip(), progress)
+            if reports is not None:
+                reports.append(report)
+            return path
+
         if vis == "ai_video":
-            start = visuals.ai_image(prompt, assets, refs) if refs else None  # same face, now moving
-            progress(f"Scene {idx + 1}: generating AI video (takes 1-3 min)...")
-            return VideoScene(visuals.ai_video(prompt, dur, assets, start, progress), dur)
-        progress(f"Scene {idx + 1}: generating AI photo...")
-        return StillScene(visuals.ai_image(prompt, assets, refs), dur, seed)
+            start = None
+            if refs:  # same face, now moving: make (and check) the first frame, then animate it
+                start = shot(lambda p, t: visuals.ai_image(p, assets, refs, take=base + t), "image", image_tries,
+                             "start frame")
+            progress(f"{label}: generating AI video (takes 1-3 min)...")
+            clip = shot(lambda p, t: visuals.ai_video(p, dur, assets, start, progress, take=base + t), "video",
+                        video_tries, "")
+            s["_asset"], s["_kind"], s["_prompt"] = clip, "ai_video", prompt
+            return VideoScene(clip, dur)
+        progress(f"{label}: generating AI photo...")
+        img = shot(lambda p, t: visuals.ai_image(p, assets, refs, take=base + t), "image", image_tries, "")
+        s["_asset"], s["_kind"], s["_prompt"] = img, "ai_image", prompt
+        return StillScene(img, dur, seed)
     except Exception as e:  # never lose the whole video to one scene
-        warn(f"Scene {idx + 1} ({vis}) failed: {str(e)[:200]} - showing the book instead.")
+        warn(f"{label} ({vis}) failed: {str(e)[:200]} - showing the book instead.")
         quotes = (book.get("digest") or {}).get("quotes") or book.get("featured") or []
         if vis not in ("page", "flip") and quotes and bk.path(book, "manuscript"):
             q = quotes[idx % len(quotes)]
@@ -690,6 +722,13 @@ def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path,
             except Exception:
                 pass
         return CoverScene(book, desk, dur, seed)
+
+
+def _scene_brief(s: dict) -> str:
+    vis = s.get("_kind") or s.get("visual")
+    brief = s.get("_prompt") or s.get("prompt") or s.get("stock_query") or s.get("highlight") or ""
+    return (f"{vis}; overlay text: '{s.get('overlay', '')}'; narration: '{s.get('voiceover', '')}'; "
+            f"shot: {brief[:220]}")
 
 
 # ---- main --------------------------------------------------------------------------------
@@ -729,14 +768,54 @@ def _segment(s: dict, idx: int, f0: int, f1: int, cap, out: Path, tick) -> None:
             raise RuntimeError(f"Encoding scene {idx + 1} failed: " + errlog.read().decode(errors="replace")[-1500:])
 
 
+def _look_through(book, scenes, segs, bounds, cap, desk, assets, warn, progress, make) -> dict:
+    """Watch the drawn video (one frame per scene, as viewers see it). Re-make AI/stock scenes that still look
+    wrong and re-draw only those scenes."""
+    progress("Looking through the finished video for flaws...", 0.93)
+    frames = []
+    for i, seg in enumerate(segs):
+        mid = (bounds[i + 1] - bounds[i]) / FPS * 0.55
+        fp = seg.with_suffix(".jpg")
+        try:
+            ff.run(["-ss", f"{mid:.2f}", "-i", seg, "-frames:v", "1", "-vf", "scale=540:-2", "-q:v", "4", fp])
+            frames.append((i, fp, _scene_brief(scenes[i])))
+        except Exception:
+            pass
+    verdict = qa.review_final(frames)
+    remade = []
+    for i, v in sorted(verdict["scenes"].items()):
+        if not (0 <= i < len(scenes)) or v["score"] >= qa.FINAL_PASS:
+            continue
+        s = scenes[i]
+        kind = s.get("_kind")
+        problems = "; ".join(v["problems"][:2]) or "looks off"
+        if kind not in ("ai_image", "ai_video", "stock"):
+            warn(f"Final check, scene {i + 1}: {problems} (not an AI shot - edit the script to change it).")
+            continue
+        progress(f"Scene {i + 1} scored {v['score']}/10 in the final check ({problems}) - re-making it...")
+        if kind == "stock":
+            s["_stock_skip"] = s.get("_stock_skip", 0) + 1
+        else:
+            s["_fixed_prompt"] = v.get("fixed_prompt") or s.get("_prompt")
+            s["_take"] = s.get("_take", 0) + 10
+        s["src"] = build_source(book, s, i, desk, assets, warn, progress, **{**make, "image_tries": 1})
+        _segment(s, i, bounds[i], bounds[i + 1], cap.for_scene(i) if cap else None, segs[i], lambda: None)
+        remade.append({"scene": i + 1, "score": v["score"], "problems": v["problems"]})
+    for _, fp, _ in frames:
+        fp.unlink(missing_ok=True)
+    return {"summary": verdict.get("summary", ""),
+            "scores": {str(i + 1): v["score"] for i, v in verdict["scenes"].items()}, "remade": remade}
+
+
 def render(book: dict, variant: dict, voice_name: str | None = None, captions: bool = True,
            music: Path | None = None, music_volume: float = 0.25, page_sound: bool = True,
+           quality_check: bool = True, video_retries: int = 1,
            progress=lambda msg, frac=None: None) -> Path:
     g = GENRES[book["genre"]]
     scenes = [dict(s) for s in variant.get("scenes", []) if s]
     if not scenes:
         raise ValueError("This script has no scenes.")
-    est = estimate(book, variant)
+    est = estimate(book, variant, quality_check)
     budget.guard(est["total"] * 0.5, "render (voice + images + video)")  # each call is guarded again as it happens
     spent_before = budget.spent_this_month()
 
@@ -760,9 +839,11 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         except Exception as e:
             warn(f"Could not create the AI desk photo ({str(e)[:120]}); using a plain wood background.")
     desk = desk_canvas(book)
+    qa_reports: list[dict] = []
+    make = dict(check=quality_check, video_tries=video_retries, reports=qa_reports)
     for i, s in enumerate(scenes):
         progress(f"Preparing scene {i + 1}/{len(scenes)} ({s.get('visual')})...", 0.05 + 0.25 * i / len(scenes))
-        s["src"] = build_source(book, s, i, desk, assets, warn, progress)
+        s["src"] = build_source(book, s, i, desk, assets, warn, progress, **make)
 
     # text layers
     accent = ass_to_rgb(g["accent"])
@@ -776,7 +857,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
             s["ov_img"] = text_card(ov, "Arial Black" if hook else g["font"], 60 if hook else 56,
                                     "box" if hook else "shadow")
         desky = s.get("visual") in ("page", "flip", "cover")
-        s["ov_y"] = H * (0.13 if desky else 0.22)
+        s["ov_y"] = H * (0.13 if desky else 0.17)
         s["cap_y"] = H * (0.77 if desky else 0.64)
     cap = Captions(words, g["caption_font"], accent, g["caption_font"] == "Arial Black") if captions and words else None
 
@@ -805,6 +886,11 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
                 for i, sc in enumerate(scenes)]
         for j in jobs:
             j.result()
+
+    final_check = None
+    if quality_check:
+        final_check = _look_through(book, scenes, segs, bounds, cap, desk, assets, warn, progress, make)
+
     silent = out_dir / "video_only.mp4"
     lst = out_dir / "segments.txt"
     lst.write_text("".join(f"file '{p.name}'\n" for p in segs), encoding="utf-8")
@@ -824,6 +910,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         "seconds": round(total, 2), "voice": voice_name or g["voice"], "captions": captions,
         "music": music.name if music else None, "cost": round(budget.spent_this_month() - spent_before, 4),
         "warnings": warnings, "file": final.name,
+        "quality": {"shots": qa_reports, "final": final_check} if quality_check else None,
     }
     (out_dir / "render.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     progress("Done!", 1.0)

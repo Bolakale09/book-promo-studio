@@ -20,9 +20,11 @@ def _key(*parts) -> str:
 
 # ---- AI images ---------------------------------------------------------------------
 
-def ai_image(prompt: str, out_dir: Path, ref_images: list[Path] | None = None) -> Path:
+def ai_image(prompt: str, out_dir: Path, ref_images: list[Path] | None = None, take: int = 0) -> Path:
+    """`take` > 0 forces a fresh generation (used by the quality check to re-make a flawed shot)."""
     ref_images = [p for p in (ref_images or []) if p and Path(p).exists()]
-    out = out_dir / f"img_{_key(config.IMAGE_MODEL, config.IMAGE_QUALITY, prompt, *ref_images)}.png"
+    parts = [config.IMAGE_MODEL, config.IMAGE_QUALITY, prompt, *ref_images] + ([f"take{take}"] if take else [])
+    out = out_dir / f"img_{_key(*parts)}.png"
     if out.exists():
         return out
     full = f"{prompt}\n\n{REALISM}"
@@ -99,9 +101,10 @@ def make_background(book: dict) -> Path:
 # ---- AI video (optional, the most expensive part) ----------------------------------------
 
 def ai_video(prompt: str, seconds: float, out_dir: Path, start_image: Path | None = None,
-             progress=lambda m: None) -> Path:
+             progress=lambda m: None, take: int = 0) -> Path:
     secs = int(max(2, min(10, round(seconds + 0.5))))
-    out = out_dir / f"vid_{_key(config.VIDEO_MODEL, prompt, secs, start_image)}.mp4"
+    parts = [config.VIDEO_MODEL, prompt, secs, start_image] + ([f"take{take}"] if take else [])
+    out = out_dir / f"vid_{_key(*parts)}.mp4"
     if out.exists():
         return out
     cost = budget.video_cost(config.VIDEO_MODEL, secs)
@@ -155,10 +158,11 @@ def _openai_video(prompt: str, secs: int, out: Path, start_image: Path | None, p
 
 # ---- free stock footage ---------------------------------------------------------------
 
-def stock_video(query: str, out_dir: Path, min_seconds: float = 3) -> Path | None:
+def stock_video(query: str, out_dir: Path, min_seconds: float = 3, skip: int = 0) -> Path | None:
+    """`skip` = how many matching clips to pass over (to swap a clip the quality check rejected)."""
     if not config.PEXELS_API_KEY:
         return None
-    out = out_dir / f"stock_{_key(query)}.mp4"
+    out = out_dir / (f"stock_{_key(query)}.mp4" if not skip else f"stock_{_key(query, skip)}.mp4")
     if out.exists():
         return out
     r = requests.get("https://api.pexels.com/videos/search", headers={"Authorization": config.PEXELS_API_KEY},
@@ -171,6 +175,9 @@ def stock_video(query: str, out_dir: Path, min_seconds: float = 3) -> Path | Non
         files = [f for f in v["video_files"] if f.get("height") and f["height"] >= f.get("width", 0)
                  and f["height"] >= 1280 and f.get("file_type") == "video/mp4"]
         if not files:
+            continue
+        if skip:
+            skip -= 1
             continue
         best = min(files, key=lambda f: abs(f["height"] - 1920))
         out.write_bytes(requests.get(best["link"], timeout=300).content)

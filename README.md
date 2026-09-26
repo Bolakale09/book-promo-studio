@@ -27,6 +27,11 @@ Makes realistic, faceless TikTok / Reels / Shorts videos that sell your book:
 - `character` / `ai_image`: photorealistic AI photo with a slow camera move. About $0.015.
 - `ai_video`: photorealistic AI video (Grok Imagine). About $0.07 per second, so use it for the hook only.
 
+## AI quality check (on by default)
+- **As each AI shot is made:** a vision AI checks every AI photo, and 4 frames of every AI clip. It looks for warped hands or faces, garbled text or logos, melting objects, a character who doesn't match their reference photo, and shots that don't match the script. If a shot scores below 7/10, it is re-made with a corrected prompt: photos up to 2 times, video clips up to the number you choose on the Render tab. The best take is kept.
+- **After the scenes are drawn:** it looks through one frame of every scene in the finished video. Any AI or stock scene that still looks wrong is re-made, and only that scene is re-drawn before the final MP4 is built.
+- **Cost:** each check costs about $0.001-0.005, and results are saved so a re-render never pays twice. Under each video, the **My videos** tab shows every score and what was fixed.
+
 ## Budget ($20/month)
 Every paid call is checked against `MONTHLY_BUDGET_USD` first. If the next call would go over the budget, it is blocked.
 - A typical video with one 4-second AI clip costs about $0.30-0.40.
