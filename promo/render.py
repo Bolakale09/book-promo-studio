@@ -576,7 +576,8 @@ def voiced(s: dict) -> bool:
     return bool((s.get("voiceover") or "").strip())
 
 
-def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets: Path, progress) -> tuple:
+def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets: Path, progress,
+                  genre: str = "fiction") -> tuple:
     """Record narration (one take per run of voiced scenes, so it flows naturally), then time each scene to it."""
     t, clips, words_all = 0.0, [], []
     i = 0
@@ -593,10 +594,10 @@ def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets
         run = scenes[i:j]
         text = " ".join(s["voiceover"].strip() for s in run)
         progress("Recording the voiceover...")
-        wav = voice.speak(text, voice_name, instructions, assets)
+        wav = voice.speak(text, voice_name, instructions, assets, genre)
         adur = ff.duration(wav)
         progress("Syncing captions to the voice (runs on your PC)...")
-        words = align_words(text, wav)
+        words = align_words(text, wav, voice.timings(wav))
         base = t + LEAD
         clips.append((wav, base))
         idx, starts = 0, []
@@ -624,7 +625,8 @@ def estimate(book: dict, variant: dict) -> dict:
     """Upper-bound cost of rendering (already-made images/clips are reused for free)."""
     g = GENRES[book["genre"]]
     scenes = variant.get("scenes", [])
-    chars = sum(len(s.get("voiceover") or "") for s in scenes) + len(g["voice_instructions"]) * 2
+    chars = sum(len(s.get("voiceover") or "") for s in scenes)
+    chars += len(g["voice_instructions"]) * 2 if config.TTS_PROVIDER == "openai" else 0
     n_img = sum(1 for s in scenes if s.get("visual") in ("character", "ai_image"))
     n_img += sum(1 for s in scenes if s.get("visual") == "stock" and not config.PEXELS_API_KEY)
     n_img += sum(1 for s in scenes if s.get("visual") == "ai_video" and s.get("character"))
@@ -748,7 +750,8 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         warnings.append(msg)
         progress(msg)
 
-    total, clips, words = plan_timeline(scenes, voice_name or g["voice"], g["voice_instructions"], assets, progress)
+    voice_name = voice_name or voice.default_voice(book["genre"])
+    total, clips, words = plan_timeline(scenes, voice_name, g["voice_instructions"], assets, progress, book["genre"])
 
     progress("Setting up the desk...")
     if not book.get("background") and (config.OPENAI_API_KEY or config.XAI_API_KEY):

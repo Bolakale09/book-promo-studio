@@ -39,7 +39,9 @@ LLM_MODEL = env("LLM_MODEL", "gpt-5-mini" if LLM_PROVIDER == "openai" else "grok
 LLM_REASONING_EFFORT = env("LLM_REASONING_EFFORT", "low")
 
 # Voice
-TTS_MODEL = env("TTS_MODEL", "gpt-4o-mini-tts")
+# "xai" (Grok TTS, cheapest, gives word timings) or "openai"
+TTS_PROVIDER = env("TTS_PROVIDER", "xai" if XAI_API_KEY else "openai")
+TTS_MODEL = env("TTS_MODEL", "grok-tts" if TTS_PROVIDER == "xai" else "gpt-4o-mini-tts")
 
 # Images: "openai" or "xai"
 IMAGE_PROVIDER = env("IMAGE_PROVIDER", "openai")

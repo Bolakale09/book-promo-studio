@@ -22,8 +22,9 @@ CHAT_PRICES = {
 }
 CHAT_FALLBACK = (2.00, 8.00)
 
-TTS_PER_CHAR = {"gpt-4o-mini-tts": 12 / 1e6, "tts-1": 15 / 1e6, "tts-1-hd": 30 / 1e6}
+TTS_PER_CHAR = {"gpt-4o-mini-tts": 12 / 1e6, "tts-1": 15 / 1e6, "tts-1-hd": 30 / 1e6, "grok-tts": 4.2 / 1e6}
 WHISPER_PER_MIN = 0.006
+XAI_STT_PER_MIN = 0.003  # conservative
 
 # per portrait image
 IMAGE_PRICES = {

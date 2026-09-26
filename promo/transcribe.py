@@ -1,4 +1,4 @@
-"""Speech-to-text with word timestamps. Runs locally for free (faster-whisper); falls back to OpenAI."""
+"""Speech-to-text with word timestamps. Runs locally for free (faster-whisper); falls back to xAI, then OpenAI."""
 import difflib
 import re
 from functools import lru_cache
@@ -18,16 +18,42 @@ _local_broken = False  # model could not be loaded/downloaded this session - don
 
 def transcribe(audio: Path) -> dict:
     """Returns {"text", "segments": [{start,end,text}], "words": [{word,start,end}]}.
-    Free local model first; OpenAI whisper-1 (~$0.006/min) if it isn't available (e.g. Hugging Face unreachable)."""
+    Free local model first; then xAI or OpenAI if it isn't available (e.g. Hugging Face unreachable)."""
     global _local_broken
     if not _local_broken:
         try:
             return _transcribe_local(audio)
         except Exception:
             _local_broken = True
-    if not config.OPENAI_API_KEY:
-        raise RuntimeError("Local transcription is unavailable and no OPENAI_API_KEY is set.")
-    return _transcribe_openai(audio)
+    if config.XAI_API_KEY and (config.TTS_PROVIDER == "xai" or not config.OPENAI_API_KEY):
+        return _transcribe_xai(audio)
+    if config.OPENAI_API_KEY:
+        return _transcribe_openai(audio)
+    raise RuntimeError("Local transcription is unavailable and no API key is set.")
+
+
+def _transcribe_xai(audio: Path) -> dict:
+    import requests
+
+    cost = ff.duration(audio) / 60 * budget.XAI_STT_PER_MIN
+    budget.guard(cost, "transcription")
+    with open(audio, "rb") as f:  # the file must be the last multipart field
+        r = requests.post("https://api.x.ai/v1/stt", headers={"Authorization": f"Bearer {config.XAI_API_KEY}"},
+                          data={"language": "en"}, files={"file": (audio.name, f)}, timeout=300)
+    if r.status_code >= 400:
+        raise RuntimeError(f"xAI transcription failed ({r.status_code}): {r.text[:300]}")
+    budget.record("transcribe", "xai-stt", cost, audio.name)
+    d = r.json()
+    words = [{"word": w.get("text", "").strip(), "start": w["start"], "end": w["end"]} for w in d.get("words", [])]
+    segments, cur = [], []
+    for w in words:  # rough sentence segments for the blueprint analysis
+        cur.append(w)
+        if re.search(r"[.!?]$", w["word"]) or len(cur) >= 14:
+            segments.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": " ".join(x["word"] for x in cur)})
+            cur = []
+    if cur:
+        segments.append({"start": cur[0]["start"], "end": cur[-1]["end"], "text": " ".join(x["word"] for x in cur)})
+    return {"text": d.get("text", ""), "segments": segments, "words": words}
 
 
 def _transcribe_local(audio: Path) -> dict:
@@ -62,20 +88,22 @@ def _norm(w: str) -> str:
     return re.sub(r"[^a-z0-9']", "", w.lower())
 
 
-def align_words(script_text: str, audio: Path) -> list[dict]:
+def align_words(script_text: str, audio: Path, heard: list[dict] | None = None) -> list[dict]:
     """Give every word of `script_text` a start/end time in `audio`.
 
-    We know exactly what the voice says (we wrote it), so we transcribe the TTS audio and
-    match the words; unmatched words are interpolated. Falls back to even spacing by length.
+    We know exactly what the voice says (we wrote it). `heard` = word timings from the TTS itself (xAI);
+    otherwise we transcribe the audio and match the words. Unmatched words are interpolated, and if
+    nothing matches the words are spread evenly by length.
     """
     tokens = script_text.split()
     if not tokens:
         return []
     total = ff.duration(audio)
-    try:
-        heard = transcribe(audio)["words"]
-    except Exception:
-        heard = []
+    if heard is None:
+        try:
+            heard = transcribe(audio)["words"]
+        except Exception:
+            heard = []
 
     times: list[tuple[float, float] | None] = [None] * len(tokens)
     if heard:

@@ -14,12 +14,10 @@ import pandas as pd
 import streamlit as st
 
 from promo import analyze, book as bk, budget, config, ingest, jobs, render, script, visuals, voice
-from promo.genres import GENRES, TTS_VOICES, default_blueprint
+from promo.genres import GENRES, default_blueprint
 
 st.set_page_config(page_title="Book Promo Studio", page_icon="📚", layout="wide")
 
-ENV_KEYS = ["OPENAI_API_KEY", "XAI_API_KEY", "PEXELS_API_KEY", "MONTHLY_BUDGET_USD", "LLM_PROVIDER",
-            "IMAGE_PROVIDER", "IMAGE_QUALITY", "VIDEO_PROVIDER"]
 VISUALS = list(script.VISUAL_TYPES)
 WEB = os.name != "nt"  # running on a Linux web server rather than the Windows PC
 MUSIC_EXT = (".mp3", ".wav", ".m4a", ".aac", ".ogg")
@@ -117,12 +115,15 @@ def sidebar() -> None:
                                                    ["openai", "xai"].index(config.IMAGE_PROVIDER)),
                     "IMAGE_QUALITY": st.selectbox("AI photo quality (OpenAI)", ["low", "medium", "high"],
                                                   ["low", "medium", "high"].index(config.IMAGE_QUALITY)),
+                    "TTS_PROVIDER": st.selectbox("Narration voice", ["xai", "openai"],
+                                                 ["xai", "openai"].index(config.TTS_PROVIDER),
+                                                 help="xai = Grok voices (cheapest), openai = gpt-4o-mini-tts"),
                     "VIDEO_PROVIDER": st.selectbox("AI video", ["xai", "openai"],
                                                    ["xai", "openai"].index(config.VIDEO_PROVIDER),
                                                    help="xai = Grok Imagine (cheapest), openai = Sora 2"),
                 }
                 if st.form_submit_button("Save settings"):
-                    for k in ("LLM_MODEL", "IMAGE_MODEL", "VIDEO_MODEL"):  # let defaults follow the provider
+                    for k in ("LLM_MODEL", "IMAGE_MODEL", "VIDEO_MODEL", "TTS_MODEL"):  # let defaults follow the provider
                         os.environ.pop(k, None)
                     vals.update({k: v for k, v in keys.items() if v.strip()})
                     save_env({k: v.strip() for k, v in vals.items()})
@@ -190,7 +191,7 @@ def tab_book(b: dict) -> None:
         with st.expander(f"🎯 The {g['label']} playbook (what the AI will follow)"):
             st.markdown("**Angles:**\n" + "\n".join(f"- {a}" for a in g["angles"]))
             st.markdown("**Hook style:**\n" + "\n".join(f"- _{h}_" for h in g["hook_examples"]))
-            st.markdown(f"**Tone:** {g['tone']}  \n**Voice:** {g['voice']} - {g['voice_instructions']}  \n"
+            st.markdown(f"**Tone:** {g['tone']}  \n**Voice:** {voice.default_voice(b['genre'])} -{g['voice_instructions']}  \n"
                         f"**Length:** ~{g['target_seconds']}s · **Ending:** {g['breadcrumb'].format(title=b['title'])}  \n"
                         f"**Rules:** {g['rules']}")
 
@@ -545,11 +546,14 @@ def tab_render(b: dict) -> None:
 
     g = GENRES[b["genre"]]
     c1, c2, c3 = st.columns(3)
-    vname = c1.selectbox("Narrator voice", TTS_VOICES, TTS_VOICES.index(g["voice"]),
-                         help="Default is chosen for the genre.")
+    vlist = voice.voices()
+    vdefault = voice.default_voice(b["genre"])
+    vname = c1.selectbox(f"Narrator voice ({config.TTS_PROVIDER})", vlist,
+                         vlist.index(vdefault) if vdefault in vlist else 0,
+                         help="Default is chosen for the genre. Change the voice provider in Settings.")
     if c1.button("▶ Hear this voice (~$0.0003)"):
         wav = run_safely(voice.speak, f"This is the voice for {b['title']}.", vname, g["voice_instructions"],
-                         bk.book_dir(b["id"]))
+                         bk.book_dir(b["id"]), b["genre"])
         if wav:
             c1.audio(str(wav))
     captions = c2.toggle("Word-by-word captions", True)
