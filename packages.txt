@@ -1,0 +1,4 @@
+ffmpeg
+fonts-liberation
+fonts-dejavu-core
+fonts-comic-neue

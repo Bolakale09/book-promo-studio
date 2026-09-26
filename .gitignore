@@ -9,3 +9,4 @@ __pycache__/
 
 # your books, manuscripts, renders, spending log
 data/
+.streamlit/secrets.toml

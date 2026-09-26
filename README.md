@@ -36,3 +36,14 @@ You can see all spending in the sidebar under **Spending log**.
 
 ## Music
 Add royalty-free tracks on the Render tab, or put them in `data/music/`. Trending TikTok sounds are best added inside the TikTok app when you post.
+
+## Put it on the web (Streamlit Community Cloud, free)
+1. Go to https://share.streamlit.io and sign in with GitHub.
+2. Click **Create app**, then **Deploy a public app from GitHub**. Pick repo `Bolakale09/book-promo-studio`, branch `main`, file `app.py`.
+3. Open **Advanced settings**. Set Python to 3.12 and paste your secrets (see `.streamlit/secrets.toml.example`). `APP_PASSWORD` is required, so strangers can't spend your credits.
+4. Click **Deploy**. The first build takes about 5-10 minutes.
+
+Things to know about the web version:
+- Files on the free server are wiped when the app restarts. That includes books, videos and the spending log. **Download your videos** after rendering.
+- Set hard monthly limits in your OpenAI and xAI billing pages too, because the in-app budget log resets whenever the app restarts.
+- The free server has little CPU, so renders are slower than on your PC.

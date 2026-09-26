@@ -796,7 +796,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
                 progress(f"Drawing frames {done[0]}/{n_frames}", 0.3 + 0.62 * done[0] / n_frames)
 
     segs = [out_dir / f"seg_{i:02d}.mp4" for i in range(len(scenes))]
-    workers = max(1, min(3, (os.cpu_count() or 2) // 2))
+    workers = int(os.getenv("RENDER_WORKERS", "0")) or max(1, min(2, (os.cpu_count() or 2) // 2))
     with ThreadPoolExecutor(workers) as pool:
         jobs = [pool.submit(_segment, sc, i, bounds[i], bounds[i + 1], cap.for_scene(i) if cap else None, segs[i], tick)
                 for i, sc in enumerate(scenes)]

@@ -2,6 +2,7 @@
 
 Run with:  run.bat   (or: .venv\\Scripts\\streamlit run app.py)
 """
+import hmac
 import importlib
 import json
 import os
@@ -20,6 +21,7 @@ st.set_page_config(page_title="Book Promo Studio", page_icon="📚", layout="wid
 ENV_KEYS = ["OPENAI_API_KEY", "XAI_API_KEY", "PEXELS_API_KEY", "MONTHLY_BUDGET_USD", "LLM_PROVIDER",
             "IMAGE_PROVIDER", "IMAGE_QUALITY", "VIDEO_PROVIDER"]
 VISUALS = list(script.VISUAL_TYPES)
+WEB = os.name != "nt"  # running on a Linux web server rather than the Windows PC
 MUSIC_EXT = (".mp3", ".wav", ".m4a", ".aac", ".ogg")
 
 
@@ -96,11 +98,16 @@ def sidebar() -> None:
 
         with st.expander("⚙️ Settings & API keys", expanded=bool(missing)):
             with st.form("settings"):
+                def key_input(label: str, attr: str) -> str:  # never send a saved key back to the browser
+                    saved = "saved ✓ - leave blank to keep" if getattr(config, attr) else ""
+                    return st.text_input(label, type="password", placeholder=saved)
+
+                keys = {
+                    "OPENAI_API_KEY": key_input("OpenAI API key", "OPENAI_API_KEY"),
+                    "XAI_API_KEY": key_input("xAI (Grok) API key", "XAI_API_KEY"),
+                    "PEXELS_API_KEY": key_input("Pexels API key (free, optional)", "PEXELS_API_KEY"),
+                }
                 vals = {
-                    "OPENAI_API_KEY": st.text_input("OpenAI API key", config.OPENAI_API_KEY, type="password"),
-                    "XAI_API_KEY": st.text_input("xAI (Grok) API key", config.XAI_API_KEY, type="password"),
-                    "PEXELS_API_KEY": st.text_input("Pexels API key (free, optional)", config.PEXELS_API_KEY,
-                                                    type="password"),
                     "MONTHLY_BUDGET_USD": str(st.number_input("Monthly budget (USD)", 1.0, 500.0,
                                                               float(config.MONTHLY_BUDGET_USD), 1.0)),
                     "LLM_PROVIDER": st.selectbox("Script writer", ["openai", "xai"],
@@ -117,9 +124,13 @@ def sidebar() -> None:
                 if st.form_submit_button("Save settings"):
                     for k in ("LLM_MODEL", "IMAGE_MODEL", "VIDEO_MODEL"):  # let defaults follow the provider
                         os.environ.pop(k, None)
+                    vals.update({k: v for k, v in keys.items() if v.strip()})
                     save_env({k: v.strip() for k, v in vals.items()})
                     st.success("Saved.")
                     st.rerun()
+            if WEB:
+                st.caption("Web version: keys typed here last until the app restarts. Put them in the app's "
+                           "Secrets for good.")
             st.caption(f"Models: {config.LLM_MODEL} · {config.IMAGE_MODEL} ({config.IMAGE_QUALITY}) · "
                        f"{config.VIDEO_MODEL} · {config.TTS_MODEL}")
 
@@ -614,6 +625,29 @@ def tab_videos(b: dict) -> None:
 
 # ---- main -------------------------------------------------------------------------------------
 
+def password_gate() -> None:
+    """On the web, only people with APP_PASSWORD can use the app (and spend the API credits)."""
+    pw = os.getenv("APP_PASSWORD", "")
+    if not pw:
+        if WEB:
+            st.error("Set APP_PASSWORD in the app's Secrets before using the web version - otherwise anyone with "
+                     "the link could spend your API credits.")
+            st.stop()
+        return
+    if st.session_state.get("authed"):
+        return
+    st.title("📚 Book Promo Studio")
+    with st.form("login"):
+        typed = st.text_input("Password", type="password")
+        if st.form_submit_button("Enter", type="primary"):
+            if hmac.compare_digest(typed.encode(), pw.encode()):
+                st.session_state["authed"] = True
+                st.rerun()
+            st.error("Wrong password.")
+    st.stop()
+
+
+password_gate()
 sidebar()
 st.title("Book Promo Studio")
 st.caption("Realistic, faceless promo videos for TikTok, Reels and Shorts: hook → feeling → proof from your pages → "

@@ -10,19 +10,43 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from . import config, llm
 from .genres import GENRES
 
-FONTS = Path("C:/Windows/Fonts")
+FONT_DIRS = [Path("C:/Windows/Fonts"), Path("/usr/share/fonts"), Path.home() / ".fonts"]
+
+# Windows font first, then the free Linux look-alikes installed on the web server (see packages.txt)
+FONT_FILES = {
+    "serif": ["georgia.ttf", "times.ttf", "LiberationSerif-Regular.ttf", "DejaVuSerif.ttf"],
+    "serif-italic": ["georgiai.ttf", "timesi.ttf", "LiberationSerif-Italic.ttf", "DejaVuSerif-Italic.ttf"],
+    "bold": ["ariblk.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf"],
+    "sans": ["arial.ttf", "segoeui.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"],
+    "Georgia": ["georgiab.ttf", "georgia.ttf", "LiberationSerif-Bold.ttf", "DejaVuSerif-Bold.ttf"],
+    "Arial Black": ["ariblk.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf"],
+    "Arial": ["arialbd.ttf", "arial.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"],
+    "Comic Sans MS": ["comicbd.ttf", "comic.ttf", "ComicNeue-Bold.ttf", "ComicNeue-Bold.otf",
+                      "DejaVuSans-Bold.ttf"],
+}
+_font_paths: dict[str, Path | None] = {}
+
+
+def _find_font(filename: str) -> Path | None:
+    if filename not in _font_paths:
+        _font_paths[filename] = None
+        for d in FONT_DIRS:
+            if (d / filename).exists():
+                _font_paths[filename] = d / filename
+                break
+            if d.exists() and d.name != "Fonts":  # Linux keeps fonts in sub-folders
+                hit = next(d.rglob(filename), None)
+                if hit:
+                    _font_paths[filename] = hit
+                    break
+    return _font_paths[filename]
 
 
 def font(name: str, size: int) -> ImageFont.FreeTypeFont:
-    files = {
-        "serif": ["georgia.ttf", "times.ttf"], "serif-italic": ["georgiai.ttf", "timesi.ttf"],
-        "bold": ["ariblk.ttf", "arialbd.ttf"], "sans": ["arial.ttf", "segoeui.ttf"],
-        "Georgia": ["georgiab.ttf", "georgia.ttf"], "Arial Black": ["ariblk.ttf", "arialbd.ttf"],
-        "Arial": ["arialbd.ttf", "arial.ttf"], "Comic Sans MS": ["comicbd.ttf", "comic.ttf"],
-    }.get(name, ["ariblk.ttf", "arialbd.ttf"])
-    for f in files:
-        if (FONTS / f).exists():
-            return ImageFont.truetype(str(FONTS / f), size)
+    for f in FONT_FILES.get(name, FONT_FILES["bold"]):
+        p = _find_font(f)
+        if p:
+            return ImageFont.truetype(str(p), size)
     return ImageFont.load_default(size)
 
 
