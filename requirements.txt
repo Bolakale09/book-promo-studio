@@ -1,0 +1,12 @@
+streamlit>=1.40
+openai>=1.60
+python-dotenv
+requests
+pillow>=11
+numpy
+pandas
+pymupdf
+python-docx
+faster-whisper
+yt-dlp
+imageio-ffmpeg

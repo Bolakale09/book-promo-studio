@@ -1,0 +1,11 @@
+# secrets - never commit
+.env
+
+# local environment + downloaded tools
+.venv/
+tools/
+__pycache__/
+*.pyc
+
+# your books, manuscripts, renders, spending log
+data/
