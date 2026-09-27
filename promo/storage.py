@@ -59,19 +59,45 @@ def _bucket() -> str:
     return b.rstrip("/").rsplit("/", 1)[-1] if "cloudflarestorage.com" in b else b
 
 
+_found_endpoint: dict = {"url": None}  # set when the bucket turned out to live in the EU jurisdiction
+
+
+def _endpoint() -> str:
+    acct, jur = _account()
+    return (_clean(config.R2_ENDPOINT) or _found_endpoint["url"]
+            or f"https://{acct}{jur}.r2.cloudflarestorage.com")
+
+
+def _make_client(endpoint: str):
+    import boto3
+    from botocore.config import Config
+    return boto3.client(
+        "s3", endpoint_url=endpoint, aws_access_key_id=_clean(config.R2_ACCESS_KEY_ID),
+        aws_secret_access_key=_clean(config.R2_SECRET_ACCESS_KEY), region_name="auto",
+        config=Config(signature_version="s3v4", retries={"max_attempts": 4, "mode": "standard"},
+                      connect_timeout=10, read_timeout=120))
+
+
 def client():
-    key = (config.R2_ACCOUNT_ID, config.R2_ENDPOINT, config.R2_ACCESS_KEY_ID, config.R2_SECRET_ACCESS_KEY)
+    key = (_endpoint(), config.R2_ACCESS_KEY_ID, config.R2_SECRET_ACCESS_KEY)
     if key not in _client_cache:
-        import boto3
-        from botocore.config import Config
-        acct, jur = _account()
-        endpoint = _clean(config.R2_ENDPOINT) or f"https://{acct}{jur}.r2.cloudflarestorage.com"
-        _client_cache[key] = boto3.client(
-            "s3", endpoint_url=endpoint, aws_access_key_id=_clean(config.R2_ACCESS_KEY_ID),
-            aws_secret_access_key=_clean(config.R2_SECRET_ACCESS_KEY), region_name="auto",
-            config=Config(signature_version="s3v4", retries={"max_attempts": 4, "mode": "standard"},
-                          connect_timeout=10, read_timeout=120))
+        _client_cache[key] = _make_client(key[0])
     return _client_cache[key]
+
+
+def _try_eu_endpoint(error: Exception) -> bool:
+    """A bucket in the EU jurisdiction only answers on <account>.eu.r2...; try it before giving up."""
+    acct, jur = _account()
+    if config.R2_ENDPOINT or jur or _found_endpoint["url"] or not any(
+            code in str(error) for code in ("Unauthorized", "NoSuchBucket", "AccessDenied", "InvalidAccessKeyId")):
+        return False
+    url = f"https://{acct}.eu.r2.cloudflarestorage.com"
+    try:
+        _make_client(url).list_objects_v2(Bucket=_bucket(), MaxKeys=1)
+    except Exception:
+        return False
+    _found_endpoint["url"] = url
+    return True
 
 
 def diagnose() -> list[str]:
@@ -99,8 +125,10 @@ def diagnose() -> list[str]:
 
 
 HINTS = {
-    "Unauthorized": "R2 rejected the keys. Usually the 'Token value' was used instead of the 'Secret Access Key', "
-                    "or the Account ID belongs to a different account.",
+    "Unauthorized": "R2 rejected the keys. Check: (1) R2_ACCOUNT_ID is the Account ID from the R2 overview page, "
+                    "not a website's Zone ID (both are 32 characters); (2) the keys are the token's 'Access Key ID' "
+                    "and 'Secret Access Key', not the 'Token value'; (3) the token has Object Read & Write on this "
+                    "bucket.",
     "InvalidAccessKeyId": "The Access Key ID is not recognised - copy it again from the R2 API token screen.",
     "SignatureDoesNotMatch": "The Secret Access Key doesn't match the Access Key ID - copy both again.",
     "AccessDenied": "The token doesn't have permission for this bucket - give it 'Object Read & Write' and include "
@@ -116,8 +144,13 @@ def explain(error: str) -> str:
 
 def test_connection() -> tuple[bool, str]:
     try:
-        client().list_objects_v2(Bucket=_bucket(), MaxKeys=1)
-        return True, f"Connected to bucket '{_bucket()}'."
+        try:
+            client().list_objects_v2(Bucket=_bucket(), MaxKeys=1)
+        except Exception as e:
+            if not _try_eu_endpoint(e):
+                raise
+        eu = " (EU jurisdiction)" if _found_endpoint["url"] else ""
+        return True, f"Connected to bucket '{_bucket()}'{eu}."
     except Exception as e:
         msg = f"{type(e).__name__}: {str(e)[:200]}"
         return False, msg + (f" - {explain(msg)}" if explain(msg) else "")
@@ -189,7 +222,12 @@ def _remote_objects() -> dict[str, dict]:
 
 def restore(progress=lambda msg: None) -> dict:
     """Bring this machine up to date with the cloud copy. Never deletes local files."""
-    remote = _remote_objects()
+    try:
+        remote = _remote_objects()
+    except Exception as e:
+        if not _try_eu_endpoint(e):
+            raise
+        remote = _remote_objects()
     idx = _load_index()
     got = kept = lazy = 0
     for r, o in remote.items():
