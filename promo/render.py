@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from . import book as bk, budget, config, ffmpeg_utils as ff, qa, visuals, voice
+from . import book as bk, budget, config, ffmpeg_utils as ff, qa, sfx, visuals, voice
 from .genres import GENRES
 from .transcribe import align_words
 
@@ -116,13 +116,16 @@ class PageScene:
     def __init__(self, book: dict, desk: Image.Image, page_no: int, highlight: str, dur: float, flips: int, seed: int):
         rnd = random.Random(seed)
         self.dur = dur
+        self.S = 1.8                          # sharper canvas: the camera pushes in further on the text
+        self.CW, self.CH = int(W * self.S), int(H * self.S)
         n_pages = max(1, bk.page_count(book))
         page_no = max(1, min(page_no, n_pages))
         tgt, boxes = bk.render_page(book, page_no, highlight)
-        pw = int(CW * 0.84)
+        spread = page_no > 1                  # there is a left-hand page -> frame it as an open book
+        pw = int(self.CW * (0.66 if spread else 0.8))
         sc = pw / tgt.width
-        if tgt.height * sc > CH * 0.86:
-            sc = CH * 0.86 / tgt.height
+        if tgt.height * sc > self.CH * 0.86:
+            sc = self.CH * 0.86 / tgt.height
             pw = int(tgt.width * sc)
         ph = int(tgt.height * sc)
         self.pw, self.ph = pw, ph
@@ -137,28 +140,31 @@ class PageScene:
         self.backs_rgba = [b.convert("RGBA") for b in self.backs]
 
         self.angle = rnd.uniform(-1.8, 1.8)
-        self.cc = (CW / 2, CH * 0.5)
+        self.cc = (self.CW * (0.6 if spread else 0.5), self.CH * 0.5)
         self.pc = (pw / 2, ph / 2)
-        self.desk = desk.copy()
-        darken(self.desk, soft_shadow((pw, ph), self.angle), (self.cc[0] + 16 * S, self.cc[1] + 24 * S))
+        self.desk = desk.resize((self.CW, self.CH), Image.BILINEAR)
+        darken(self.desk, soft_shadow((pw, ph), self.angle), (self.cc[0] + 16 * self.S, self.cc[1] + 24 * self.S))
         self.gutter = self._gutter()
+        self._edges = self._stack_edges()
 
         n = len(self.prev)
-        self.hold = 0.25 if n else 0.0
-        self.turn = (0.65 if n == 1 else 0.34) if n else 0.0
-        if n and self.hold + n * self.turn > dur * 0.5:
-            self.turn = max(0.2, (dur * 0.5 - self.hold) / n)
+        self.hold = 0.3 if n else 0.0
+        self.turn = (0.85 if n == 1 else 0.42) if n else 0.0
+        if n and self.hold + n * self.turn > dur * 0.55:
+            self.turn = max(0.24, (dur * 0.55 - self.hold) / n)
         self.flip_end = self.hold + n * self.turn
-        self.flip_times = [self.hold + i * self.turn for i in range(n)]
+        self.flip_events = [(self.hold + i * self.turn, self.turn) for i in range(n)]  # (start, length) for sound
         self.hl_start = self.flip_end + 0.15
         self.hl_dur = min(1.2, max(0.5, 0.1 * len(self.boxes)))
         fx, fy = bk.highlight_focus(self.target, self.boxes) if self.boxes else (0.5, 0.36)
         self.focus = rot(fx * pw, fy * ph, self.angle, self.pc, self.cc)
-        self.zoom_end = 1.2
+        self.zoom_end = 1.35
         if self.boxes:  # push in close, but keep the whole highlighted passage in frame
             xs = [x for b in self.boxes for x in (b[0], b[2])]
             ys = [y for b in self.boxes for y in (b[1], b[3])]
-            self.zoom_end = max(1.1, min(1.5, CW * 0.88 / max(1, max(xs) - min(xs)), CH * 0.5 / max(1, max(ys) - min(ys))))
+            self.zoom_end = max(1.2, min(self.CW / (pw * 1.08), self.CH * 0.45 / max(1, max(ys) - min(ys))))
+            # keep whole lines in view: centre on the page column, at the height of the quote
+            self.focus = (rot(pw / 2, 0, self.angle, self.pc, self.cc)[0], self.focus[1])
         self._cache: dict = {}
         self._hl_polys = [[rot(x, y, self.angle, self.pc, self.cc) for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3]))]
                           for b in self.boxes]
@@ -179,6 +185,21 @@ class PageScene:
             d.line([(x, 0), (x, self.ph)], fill=int(120 * (1 - abs(x - g) / g) ** 2))
         return band.rotate(self.angle, resample=Image.BICUBIC, expand=True)
 
+    def _stack_edges(self) -> list[Image.Image]:
+        """Pre-rotated paper layers peeking out under the top page = the book block's edges."""
+        out = []
+        for k, tone in ((4, (196, 188, 170)), (3, (212, 204, 187)), (2, (224, 217, 200)), (1, (234, 228, 212))):
+            layer = Image.new("RGBA", (self.pw, self.ph), tone + (255,))
+            out.append((k, layer.rotate(self.angle, resample=Image.BICUBIC, expand=True)))
+        return out
+
+    def _place_edges(self, c: Image.Image, side: int) -> None:
+        for k, layer in self._edges:
+            ox = side * k * 1.5 * self.S
+            cx, cy = rot(self.pw / 2 + ox, self.ph / 2 + k * 1.1 * self.S, self.angle, self.pc, self.cc) if side > 0 else \
+                rot(-self.pw / 2 + ox, self.ph / 2 + k * 1.1 * self.S, self.angle, self.pc, self.cc)
+            c.paste(layer, (round(cx - layer.width / 2), round(cy - layer.height / 2)), layer)
+
     def _canvas(self, top: Image.Image, left: Image.Image | None, hl: float = 0.0) -> Image.Image:
         key = (id(top), id(left), hl)
         if key in self._cache:
@@ -188,12 +209,16 @@ class PageScene:
         else:
             c = self.desk.copy()
             if left is not None:
+                self._place_edges(c, -1)
                 place(c, left, self.angle, rot(-self.pw / 2, self.ph / 2, self.angle, self.pc, self.cc))
+            self._place_edges(c, 1)
             place(c, bk.apply_highlight(top, self.boxes, 1.0) if hl >= 1 else top, self.angle, self.cc)
             if left is not None:
                 darken(c, self.gutter, rot(0, self.ph / 2, self.angle, self.pc, self.cc))
-        if len(self._cache) > 6:
+        if len(self._cache) > 2:  # each canvas is ~20 MB: keep only the clean + fully highlighted page
             self._cache = {k: v for k, v in self._cache.items() if k[2] in (0.0, 1.0)}
+            while len(self._cache) > 2:
+                self._cache.pop(next(iter(self._cache)))
         self._cache[key] = c
         return c
 
@@ -218,62 +243,115 @@ class PageScene:
         c.paste(full.crop((bx0, by0, bx1, by1)), (bx0, by0), mask)
         return c
 
-    def _turning(self, c: Image.Image, i: int, u: float) -> None:
-        """Draw sheet i part-way through turning over the spine (u 0 -> 1)."""
-        th = math.pi * u
-        cs, sn = math.cos(th), math.sin(th)
-        if abs(cs) < 0.03:
-            return
-        pw, ph, k = self.pw, self.ph, 0.06
-        ex = pw * cs
-        quad = [(0, 0), (ex, -ph * k * sn), (ex, ph + ph * k * sn), (0, ph)]
-        pts = [rot(x, y, self.angle, self.pc, self.cc) for x, y in quad]
-        if cs > 0:
-            img, src, shade = self.prev_rgba[i], [(0, 0), (pw, 0), (pw, ph), (0, ph)], 0.3 * sn * sn
-        else:
-            img, src, shade = self.backs_rgba[i], [(pw, 0), (0, 0), (0, ph), (pw, ph)], 0.22 * sn
+    SEG = 28                                   # strips the bending sheet is drawn with
+    LIGHT = (-0.45, 0.893)                     # light from the upper left (x, z), normalised
+    HALF = (-0.231, 0.973)                     # half-vector between light and camera, for the sheen
 
-        # shadow the lifted sheet casts on the page underneath
-        sx = ex + math.copysign(pw * 0.12 * sn, cs)
-        sh_pts = [rot(x, y, self.angle, self.pc, self.cc) for x, y in [(0, 0), (sx, 0), (sx, ph), (0, ph)]]
-        mx0, my0 = min(p[0] for p in sh_pts) - 60, min(p[1] for p in sh_pts) - 60
-        mw, mh = int(max(p[0] for p in sh_pts) - mx0 + 60), int(max(p[1] for p in sh_pts) - my0 + 60)
-        if mw > 8 and mh > 8:
+    def _sheet(self, u: float) -> list[tuple]:
+        """Cross-section of the turning sheet from spine to free edge: [(s, x, z, phi_of_segment)].
+        The sheet bends: its free edge leads while it lifts and trails while it lands, like a real page."""
+        th = math.pi * u
+        bend = 0.75 * math.sin(2 * math.pi * u) + 0.35 * math.sin(math.pi * u)
+        pts, x, z, ds = [(0.0, 0.0, 0.0, th)], 0.0, 0.0, 1.0 / self.SEG
+        for k in range(self.SEG):
+            phi = min(math.pi, max(0.0, th + bend * ((k + 0.5) * ds) ** 1.6))
+            x += math.cos(phi) * ds * self.pw
+            z += math.sin(phi) * ds * self.pw
+            pts.append(((k + 1) * ds, x, z, phi))
+        return pts
+
+    def _proj(self, x: float, z: float, y: float) -> tuple[float, float]:
+        """Perspective from a camera above the desk: higher parts of the sheet look bigger."""
+        f = 1.9 * self.ph / (1.9 * self.ph - z)
+        return self.pw / 2 + (x - self.pw / 2) * f, self.ph / 2 + (y - self.ph / 2) * f
+
+    def _turning(self, c: Image.Image, i: int, u: float) -> None:
+        """Draw sheet i curling over the spine (u 0 -> 1), with its cast shadow and curved shading."""
+        if u <= 0.001 or u >= 0.999:
+            return
+        pw, ph = self.pw, self.ph
+        pts = self._sheet(u)
+        to_canvas = lambda x, y: rot(x, y, self.angle, self.pc, self.cc)
+
+        # shadow on the page below: each point drops toward the lower right by its height; softer when higher
+        zmax = max(p[2] for p in pts)
+        if zmax > 2:
+            poly = [to_canvas(x + z * 0.5, 0 + z * 0.22) for _, x, z, _ in pts]
+            poly += [to_canvas(x + z * 0.5, ph + z * 0.22) for _, x, z, _ in reversed(pts)]
             q = 4
-            m = Image.new("L", (mw // q, mh // q), 0)
-            ImageDraw.Draw(m).polygon([((x - mx0) / q, (y - my0) / q) for x, y in sh_pts], fill=int(120 * sn))
-            m = m.filter(ImageFilter.GaussianBlur(14 * S / q)).resize((mw, mh), Image.BILINEAR)
+            mx0, my0 = min(p[0] for p in poly) - 80, min(p[1] for p in poly) - 80
+            mw, mh = int(max(p[0] for p in poly) - mx0 + 80), int(max(p[1] for p in poly) - my0 + 80)
+            m = Image.new("L", (mw // q + 1, mh // q + 1), 0)
+            strength = int(135 * (1 - math.exp(-zmax / (0.12 * pw))) * (0.55 + 0.45 * math.sin(math.pi * u)))
+            ImageDraw.Draw(m).polygon([((x - mx0) / q, (y - my0) / q) for x, y in poly], fill=strength)
+            m = m.filter(ImageFilter.GaussianBlur((6 + 0.05 * zmax / self.S) * self.S / q)).resize((mw, mh), Image.BILINEAR)
             c.paste((0, 0, 0), (int(mx0), int(my0), int(mx0) + mw, int(my0) + mh), m)
 
-        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        x0, y0 = math.floor(min(xs)), math.floor(min(ys))
-        bw, bh = math.ceil(max(xs)) - x0, math.ceil(max(ys)) - y0
-        if bw < 2 or bh < 2:
-            return
-        piece = img.transform((bw, bh), Image.PERSPECTIVE, persp_coeffs([(x - x0, y - y0) for x, y in pts], src),
-                              Image.BILINEAR)
-        alpha = piece.split()[3]
-        f = 1 - shade
-        rgb = piece.convert("RGB").point(lambda v: int(v * f))
-        c.paste(rgb, (x0, y0), alpha)
+        # the sheet itself, strip by strip, lowest first so higher parts cover lower ones
+        W, H = self.prev_rgba[i].size
+        segs = sorted(range(self.SEG), key=lambda k: pts[k][2] + pts[k + 1][2])
+        for k in segs:
+            s0, x0, z0, _ = pts[k]
+            s1, x1, z1, phi = pts[k + 1]
+            front = math.cos(phi) >= 0
+            X0, T0 = self._proj(x0, z0, 0)
+            X1, T1 = self._proj(x1, z1, 0)
+            _, B0 = self._proj(x0, z0, ph)
+            _, B1 = self._proj(x1, z1, ph)
+            if abs(X1 - X0) < 0.4:
+                continue
+            d = math.copysign(0.8, X1 - X0)       # overlap strips a hair so no seams show
+            quad = [to_canvas(X0 - d, T0), to_canvas(X1 + d, T1), to_canvas(X1 + d, B1), to_canvas(X0 - d, B0)]
+            if front:
+                img, c0, c1 = self.prev_rgba[i], s0 * W, s1 * W
+                nx, nz = -math.sin(phi), math.cos(phi)
+            else:
+                img, c0, c1 = self.backs_rgba[i], (1 - s0) * W, (1 - s1) * W
+                nx, nz = math.sin(phi), -math.cos(phi)
+            lam = max(0.0, nx * self.LIGHT[0] + nz * self.LIGHT[1]) / self.LIGHT[1]
+            bright = min(1.02, 0.58 + 0.42 * lam)
+            sheen = 0.07 * max(0.0, nx * self.HALF[0] + nz * self.HALF[1]) ** 90
+            xs, ys = [p[0] for p in quad], [p[1] for p in quad]
+            bx, by = math.floor(min(xs)), math.floor(min(ys))
+            bw, bh = math.ceil(max(xs)) - bx, math.ceil(max(ys)) - by
+            if bw < 1 or bh < 2:
+                continue
+            piece = img.transform((bw, bh), Image.PERSPECTIVE,
+                                  persp_coeffs([(x - bx, y - by) for x, y in quad],
+                                               [(c0, 0), (c1, 0), (c1, H), (c0, H)]), Image.BILINEAR)
+            lut = [min(255, int(v * bright + sheen * 255)) for v in range(256)]
+            piece = piece.point(lut * 3 + list(range(256)))   # shade colour, keep transparency
+            c.paste(piece, (bx, by), piece)
+
+        # the free edge catches a thin dark line (paper thickness)
+        _, xe, ze, phe = pts[-1]
+        xa, ta = self._proj(xe, ze, 0)
+        _, ba = self._proj(xe, ze, ph)
+        edge = (178, 168, 150) if math.cos(phe) >= 0 else (160, 151, 134)
+        ImageDraw.Draw(c).line([to_canvas(xa, ta), to_canvas(xa, ba)], fill=edge, width=max(1, int(1.4 * self.S)))
 
     def frame(self, t: float) -> Image.Image:
         n = len(self.prev)
         if n and t < self.flip_end:
             i = 0 if t < self.hold else min(n - 1, int((t - self.hold) // self.turn))
-            u = 0.0 if t < self.hold else ease((t - self.hold - i * self.turn) / self.turn)
             beneath = self.prev[i + 1] if i + 1 < n else self.target
             left = self.backs[i - 1] if i > 0 else self.initial_left
-            c = self._canvas(beneath, left).copy()
-            self._turning(c, i, u)
-            return camera(c, 1.03, self.cc[0], self.cc[1], t)
+            base = self._canvas(beneath, left)
+
+            def at(tt: float) -> float:
+                x = (tt - self.hold - i * self.turn) / self.turn
+                return 0.0 if tt < self.hold else 0.5 - 0.5 * math.cos(math.pi * min(1.0, max(0.0, x)))
+
+            c = base.copy()
+            self._turning(c, i, at(t))
+            return camera(c, 1.02, self.CW / 2, self.CH / 2, t)
         left = self.backs[-1] if n else self.initial_left
         hl = round(ease((t - self.hl_start) / self.hl_dur) * 16) / 16 if self.boxes else 0.0
         c = self._canvas(self.target, left, hl)
         u = ease((t - self.flip_end) / max(0.4, self.dur - self.flip_end - 0.1))
-        zoom = 1.03 + (self.zoom_end - 1.03) * u
-        cx = self.cc[0] + (self.focus[0] - self.cc[0]) * u
-        cy = self.cc[1] + (self.focus[1] - self.cc[1]) * u
+        zoom = 1.02 + (self.zoom_end - 1.02) * u
+        cx = self.CW / 2 + (self.focus[0] - self.CW / 2) * u
+        cy = self.CH / 2 + (self.focus[1] - self.CH / 2) * u
         return camera(c, zoom, cx, cy, t)
 
 
@@ -500,27 +578,6 @@ def paste_center(frame: Image.Image, img: Image.Image, cy: float, fade: float = 
 
 # ---- sound ------------------------------------------------------------------------------
 
-def paper_sfx() -> Path:
-    """Synthesised page-turn swish (no download needed)."""
-    out = config.DATA / "page_turn.wav"
-    if out.exists():
-        return out
-    sr, n = 44100, int(0.42 * 44100)
-    noise = np.random.default_rng(7).standard_normal(n)
-    band = np.convolve(noise, np.ones(5) / 5, "same") - np.convolve(noise, np.ones(70) / 70, "same")
-    t = np.linspace(0, 1, n)
-    env = np.clip(t / 0.15, 0, 1) * np.exp(-np.clip(t - 0.15, 0, None) * 5)
-    env *= 0.7 + 0.3 * np.sin(2 * np.pi * 19 * t) ** 2
-    sig = band * env
-    sig = (sig / np.abs(sig).max() * 0.55 * 32767).astype(np.int16)
-    with wave.open(str(out), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(sig.tobytes())
-    return out
-
-
 def mix_audio(video: Path, voices: list, sfx: list, music: Path | None, music_volume: float, total: float,
               out: Path) -> None:
     args, fl = ["-i", video], []
@@ -539,7 +596,7 @@ def mix_audio(video: Path, voices: list, sfx: list, music: Path | None, music_vo
         return labels
 
     v_labels = add(voices, "v", 1.0)
-    s_labels = add(sfx, "s", 0.5)
+    s_labels = add(sfx, "s", 0.6)
     final = []
     if v_labels:
         fl.append("".join(v_labels) + (f"amix=inputs={len(v_labels)}:normalize=0" if len(v_labels) > 1 else "anull")
@@ -560,12 +617,14 @@ def mix_audio(video: Path, voices: list, sfx: list, music: Path | None, music_vo
             final.append("[mu]")
     elif v_labels:
         final.append("[vo]")
-    if not final:
-        args.extend(["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"])
-        fl.append(f"[{idx}:a]anull[out0]")
-        final = ["[out0]"]
-    fl.append("".join(final) + (f"amix=inputs={len(final)}:normalize=0," if len(final) > 1 else "")
-              + f"apad,atrim=0:{total:.2f},alimiter=limit=0.95[aout]")
+    if music:
+        idx += 1
+    # a silent bed exactly as long as the video: the mix always lasts the full length and always ends
+    args.extend(["-f", "lavfi", "-t", f"{total:.3f}", "-i", "anullsrc=r=44100:cl=stereo"])
+    fl.append(f"[{idx}:a]anull[bed]")
+    final.append("[bed]")
+    fl.append("".join(final) + f"amix=inputs={len(final)}:normalize=0:duration=longest,"
+              + f"atrim=0:{total:.3f},alimiter=limit=0.95[aout]")
     ff.run([*args, "-filter_complex", ";".join(fl), "-map", "0:v", "-map", "[aout]", "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k", "-t", f"{total:.2f}", "-movflags", "+faststart", out])
 
@@ -861,11 +920,11 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         s["cap_y"] = H * (0.77 if desky else 0.64)
     cap = Captions(words, g["caption_font"], accent, g["caption_font"] == "Arial Black") if captions and words else None
 
-    sfx = []
+    sfx_clips = []
     if page_sound:
-        for s in scenes:
-            for ft in getattr(s["src"], "flip_times", []):
-                sfx.append((paper_sfx(), s["start"] + ft))
+        for si, s in enumerate(scenes):
+            for k, (ft, fd) in enumerate(getattr(s["src"], "flip_events", [])):
+                sfx_clips.append((sfx.page_turn(fd, variant=si * 3 + k), s["start"] + ft))
 
     # draw + encode every scene as its own segment, two at a time (Pillow releases the GIL while it works)
     bounds = [int(round(sc["start"] * FPS)) for sc in scenes] + [int(round(total * FPS))]
@@ -900,7 +959,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
 
     progress("Mixing voice, music and sound...", 0.95)
     final = out_dir / "final.mp4"
-    mix_audio(silent, clips, sfx, music, music_volume, total, final)
+    mix_audio(silent, clips, sfx_clips, music, music_volume, total, final)
     silent.unlink(missing_ok=True)
 
     meta = {

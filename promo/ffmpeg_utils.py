@@ -22,9 +22,14 @@ def ffmpeg_exe() -> str:
         raise RuntimeError("FFmpeg not found. Run setup.bat or install FFmpeg.")
 
 
-def run(args: list, cwd: str | Path | None = None) -> str:
+def run(args: list, cwd: str | Path | None = None, timeout: float = 1200) -> str:
+    """Run FFmpeg; a stuck job is killed after `timeout` seconds instead of hogging the PC."""
     cmd = [ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", *map(str, args)]
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"FFmpeg took longer than {timeout:.0f}s and was stopped:\n{' '.join(cmd)[:500]}")
     if p.returncode != 0:
         raise RuntimeError(f"FFmpeg failed:\n{' '.join(cmd)}\n\n{p.stderr[-3000:]}")
     return p.stderr
