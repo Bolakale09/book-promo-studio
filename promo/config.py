@@ -31,6 +31,14 @@ OPENAI_API_KEY = env("OPENAI_API_KEY")
 XAI_API_KEY = env("XAI_API_KEY")
 PEXELS_API_KEY = env("PEXELS_API_KEY")  # free at pexels.com/api
 
+# Cloudflare R2 (S3-compatible) - keeps your books, scripts and videos safe when the web app restarts
+R2_ACCOUNT_ID = env("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = env("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY")
+R2_BUCKET = env("R2_BUCKET")
+R2_PREFIX = env("R2_PREFIX", "book-promo-studio")
+R2_ENDPOINT = env("R2_ENDPOINT")  # only needed for non-standard endpoints (e.g. EU jurisdiction buckets)
+
 MONTHLY_BUDGET_USD = float(env("MONTHLY_BUDGET_USD", "20"))
 
 # Text / script model: "openai" or "xai"

@@ -9,7 +9,7 @@ from promo.genres import GENRES
 
 from . import theme as t
 from .common import (PAGES, go, image_price, money, need_book, next_step, book_progress, run_safely, save_upload,
-                     sentences)
+                     sentences, video_src)
 
 
 # ---- Studio (dashboard) ----------------------------------------------------------------------
@@ -75,8 +75,9 @@ def home() -> None:
             if renders:
                 cols = st.columns(2)
                 for col, r in zip(cols, renders[:2]):
-                    if Path(r["path"]).exists():
-                        col.video(r["path"])
+                    src = video_src(r["path"])
+                    if src:
+                        col.video(src)
                     col.caption(f"**{r['variant'].get('name')}** · {r['seconds']}s")
                 st.page_link(PAGES["videos"], label="See all videos →")
             elif not active:

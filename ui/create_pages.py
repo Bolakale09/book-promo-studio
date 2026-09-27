@@ -9,7 +9,7 @@ from promo.genres import GENRES, default_blueprint
 
 from . import theme as t
 from .common import (MUSIC_EXT, frame_to_scenes, go, image_price, money, need_book, next_step, run_safely,
-                     scenes_frame)
+                     scenes_frame, video_src)
 
 VISUALS = list(script.VISUAL_TYPES)
 MIXES = {"💸 Free only": (True, 0), "⚖️ Balanced": (False, 1), "🎬 Cinematic": (False, 2)}
@@ -293,8 +293,12 @@ def videos_page() -> None:
         for col, r in zip(cols, renders[row:row + 3]):
             v, k = r["variant"], r["dir"]
             with col, st.container(border=True):
-                if Path(r["path"]).exists():
-                    st.video(r["path"])
+                fname = f"{bk.slug(b['title'])}-{bk.slug(v.get('name', 'video'))}.mp4"
+                src = video_src(r["path"])
+                if src:
+                    st.video(src)
+                else:
+                    st.caption("🎬 Video file not found on this server or in cloud storage.")
                 t.md(f'<div class="bps-card-title">{"🏆 " if r.get("winner") else ""}{t.esc(v.get("name"))}</div>')
                 t.chips([(f"{r['seconds']:.0f}s", ""), (money(r.get("cost", 0)), ""), _quality_chip(r.get("quality")),
                          (f"👁 {r.get('views', 0):,}", "gold" if r.get("views") else "")])
@@ -302,8 +306,9 @@ def videos_page() -> None:
                     st.caption(f"⚠ {len(r['warnings'])} note(s) - see Details")
                 if Path(r["path"]).exists():
                     st.download_button("⬇ Download MP4", Path(r["path"]).read_bytes(), type="primary",
-                                       file_name=f"{bk.slug(b['title'])}-{bk.slug(v.get('name', 'video'))}.mp4",
-                                       mime="video/mp4", key=f"dl_{k}", width="stretch")
+                                       file_name=fname, mime="video/mp4", key=f"dl_{k}", width="stretch")
+                elif src:  # lives in cloud storage: download straight from there
+                    st.link_button("⬇ Download MP4", video_src(r["path"], fname), type="primary", width="stretch")
                 c1, c2 = st.columns(2)
                 with c1.popover("📋 Caption", width="stretch"):
                     st.code(f"{v.get('post_caption', '')}\n\n{' '.join(v.get('hashtags', []))}", language=None)

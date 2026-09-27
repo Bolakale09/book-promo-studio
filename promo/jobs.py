@@ -75,10 +75,22 @@ def _run(d: Path) -> None:
         if opts.get("music"):
             opts["music"] = Path(opts["music"])
         out = render.render(bk.load(job["book_id"]), job["variant"], progress=progress, **opts)
+        _save_to_cloud(progress)
         _write(d, state="done", msg="Done!", frac=1.0, result=str(out), **base)
     except Exception as e:
         traceback.print_exc()
+        _save_to_cloud(lambda *a, **k: None)  # keep whatever was paid for (images, clips, spending log)
         _write(d, state="error", msg="Failed", frac=last["frac"], error=f"{type(e).__name__}: {e}", **base)
+
+
+def _save_to_cloud(progress) -> None:
+    from . import storage
+    if storage.enabled():
+        try:
+            progress("Saving to cloud storage...", 0.99)
+            storage.sync_up()
+        except Exception:
+            traceback.print_exc()
 
 
 if __name__ == "__main__":

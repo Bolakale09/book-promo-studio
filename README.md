@@ -52,7 +52,22 @@ Add royalty-free tracks on the Render tab, or put them in `data/music/`. Trendin
 3. Open **Advanced settings**. Set Python to 3.12 and paste your secrets (see `.streamlit/secrets.toml.example`). `APP_PASSWORD` is required, so strangers can't spend your credits.
 4. Click **Deploy**. The first build takes about 5-10 minutes.
 
+## Cloud storage (Cloudflare R2) - keeps your work when the web app restarts
+The free web server wipes its disk whenever the app sleeps or restarts. With R2 turned on, the app:
+- **restores** your books, manuscripts, characters, scripts, AI shots and spending log when it wakes up;
+- **saves** every change in the background, and each finished render right away;
+- **streams** older videos straight from R2, so waking up stays fast.
+
+To set it up:
+1. In the Cloudflare dashboard, go to **R2** → **Create bucket**, for example `book-promo-studio`.
+2. Go to R2 → **Manage API tokens** → **Create API token**. Give it **Object Read & Write** permission, limited to that bucket, and copy the Access Key ID and Secret Access Key.
+3. Add `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET` to the app's **Secrets** (web) or to `.env` (PC), then restart the app.
+
+If the web app and the PC use the same bucket, they share one library.
+
+**💾 Backup & storage** in the sidebar shows the sync status. From there you can also download any book (with its videos) as a .zip and restore it later, which works even without R2.
+
 Things to know about the web version:
-- Files on the free server are wiped when the app restarts. That includes books, videos and the spending log. **Download your videos** after rendering.
-- Set hard monthly limits in your OpenAI and xAI billing pages too, because the in-app budget log resets whenever the app restarts.
+- Without R2 (above), files on the free server are wiped when the app restarts. That includes books, videos and the spending log.
+- Set hard monthly limits in your OpenAI and xAI billing pages too, as a second safety net.
 - The free server has little CPU, so renders are slower than on your PC.

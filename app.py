@@ -7,6 +7,7 @@ import os
 
 import streamlit as st
 
+from promo import storage
 from ui import common, theme
 from ui.create_pages import render_page, scripts_page, videos_page
 from ui.setup_pages import book_page, characters_page, formats_page, home, pages_page
@@ -42,7 +43,25 @@ def password_gate() -> None:
     st.stop()
 
 
+@st.cache_resource(show_spinner=False)
+def restore_library() -> dict:
+    """Once per server start: bring back books, scripts, AI shots and the spending log from Cloudflare R2."""
+    try:
+        return {"ok": True, **storage.restore()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 password_gate()
+if storage.enabled():
+    with st.spinner("Restoring your library from cloud storage..."):
+        boot = restore_library()
+    if not boot["ok"]:
+        st.error(f"Couldn't reach your cloud storage, so changes are NOT being saved to the cloud right now. "
+                 f"{boot['error'][:300]}")
+        if st.button("Try again"):
+            restore_library.clear()
+            st.rerun()
 
 common.PAGES.update({
     "home": st.Page(home, title="Studio", icon="🏠", url_path="studio", default=True),
@@ -56,4 +75,7 @@ common.PAGES.update({
 })
 nav = st.navigation(list(common.PAGES.values()), position="top")
 common.sidebar()
-nav.run()
+try:
+    nav.run()
+finally:
+    storage.sync_soon()  # upload whatever this action changed, in the background

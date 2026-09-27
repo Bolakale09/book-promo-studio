@@ -10,3 +10,4 @@ python-docx
 faster-whisper
 yt-dlp
 imageio-ffmpeg
+boto3
