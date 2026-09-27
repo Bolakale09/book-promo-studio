@@ -57,8 +57,12 @@ if storage.enabled():
     with st.spinner("Restoring your library from cloud storage..."):
         boot = restore_library()
     if not boot["ok"]:
-        st.error(f"Couldn't reach your cloud storage, so changes are NOT being saved to the cloud right now. "
-                 f"{boot['error'][:300]}")
+        hint = storage.explain(boot["error"])
+        tips = storage.diagnose()
+        st.error(f"Couldn't reach your cloud storage, so changes are NOT being saved to the cloud right now.  \n"
+                 f"`{boot['error'][:200]}`" + (f"  \n**Likely cause:** {hint}" if hint else "")
+                 + ("  \n**Check your R2 settings in Secrets:**  \n" + "  \n".join(f"• {x}" for x in tips)
+                    if tips else ""))
         if st.button("Try again"):
             restore_library.clear()
             st.rerun()

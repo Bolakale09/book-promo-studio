@@ -263,6 +263,15 @@ def storage_dialog() -> None:
                  ("Restored at start", str(r.get("downloaded", 0)), f"{r.get('videos_in_cloud', 0)} videos streamed")])
         if s.get("last_error"):
             st.error(f"Last sync failed: {s['last_error']}")
+        tips = storage.diagnose()
+        if tips:
+            st.warning("Your R2 settings look off:  \n" + "  \n".join(f"• {x}" for x in tips))
+        if st.button("🔌 Test connection", width="stretch"):
+            with st.spinner("Connecting to R2..."):
+                ok, msg = storage.test_connection()
+            (st.success if ok else st.error)(msg + ("  \nNow close this and click **Try again** at the top of the "
+                                                     "page to restore your library." if ok and
+                                                     not storage.state.get("restored") else ""))
         c1, c2 = st.columns(2)
         if c1.button("🔄 Save to cloud now", type="primary", width="stretch"):
             with st.spinner("Uploading..."):

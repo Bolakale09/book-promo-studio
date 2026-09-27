@@ -42,18 +42,85 @@ def enabled() -> bool:
 _client_cache: dict = {}
 
 
+def _clean(v: str) -> str:
+    """Settings pasted with quotes or spaces still work."""
+    return (v or "").strip().strip('"').strip("'").strip()
+
+
+def _account() -> tuple[str, str]:
+    """(account id, jurisdiction). Also accepts the full endpoint URL pasted as the account id."""
+    a = _clean(config.R2_ACCOUNT_ID)
+    m = re.search(r"([0-9a-fA-F]{32})(\.eu|\.fedramp)?\.r2\.cloudflarestorage\.com", a)
+    return (m.group(1).lower(), m.group(2) or "") if m else (a, "")
+
+
+def _bucket() -> str:
+    b = _clean(config.R2_BUCKET)
+    return b.rstrip("/").rsplit("/", 1)[-1] if "cloudflarestorage.com" in b else b
+
+
 def client():
-    key = (config.R2_ACCOUNT_ID, config.R2_ENDPOINT, config.R2_ACCESS_KEY_ID)
+    key = (config.R2_ACCOUNT_ID, config.R2_ENDPOINT, config.R2_ACCESS_KEY_ID, config.R2_SECRET_ACCESS_KEY)
     if key not in _client_cache:
         import boto3
         from botocore.config import Config
-        endpoint = config.R2_ENDPOINT or f"https://{config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+        acct, jur = _account()
+        endpoint = _clean(config.R2_ENDPOINT) or f"https://{acct}{jur}.r2.cloudflarestorage.com"
         _client_cache[key] = boto3.client(
-            "s3", endpoint_url=endpoint, aws_access_key_id=config.R2_ACCESS_KEY_ID,
-            aws_secret_access_key=config.R2_SECRET_ACCESS_KEY, region_name="auto",
+            "s3", endpoint_url=endpoint, aws_access_key_id=_clean(config.R2_ACCESS_KEY_ID),
+            aws_secret_access_key=_clean(config.R2_SECRET_ACCESS_KEY), region_name="auto",
             config=Config(signature_version="s3v4", retries={"max_attempts": 4, "mode": "standard"},
                           connect_timeout=10, read_timeout=120))
     return _client_cache[key]
+
+
+def diagnose() -> list[str]:
+    """Spot the usual set-up mistakes from the SHAPE of each setting (values are never shown)."""
+    tips = []
+    acct, _ = _account()
+    ak, sk, b = _clean(config.R2_ACCESS_KEY_ID), _clean(config.R2_SECRET_ACCESS_KEY), _bucket()
+    if not config.R2_ENDPOINT and not re.fullmatch(r"[0-9a-fA-F]{32}", acct):
+        tips.append(f"R2_ACCOUNT_ID doesn't look like a Cloudflare Account ID (it's {len(acct)} characters; an "
+                    "Account ID is 32 letters/numbers). Copy it from the R2 overview page ('Account ID'), "
+                    "not the token ID or bucket name.")
+    if not re.fullmatch(r"[0-9a-fA-F]{32}", ak):
+        tips.append(f"R2_ACCESS_KEY_ID is {len(ak)} characters; an R2 Access Key ID is usually 32. Use the "
+                    "'Access Key ID' shown after creating the R2 API token.")
+    if len(sk) == 40:
+        tips.append("R2_SECRET_ACCESS_KEY is 40 characters, which is the length of the token's 'Token value'. Use "
+                    "the 'Secret Access Key' instead (usually 64 characters) - it's shown on the same screen.")
+    elif not re.fullmatch(r"[0-9a-fA-F]{64}", sk):
+        tips.append(f"R2_SECRET_ACCESS_KEY is {len(sk)} characters; an R2 Secret Access Key is usually 64.")
+    if ak and sk and ak == sk:
+        tips.append("R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY are the same value - they must be different.")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", b):
+        tips.append("R2_BUCKET should be just the bucket name in lowercase (e.g. book-promo-studio).")
+    return tips
+
+
+HINTS = {
+    "Unauthorized": "R2 rejected the keys. Usually the 'Token value' was used instead of the 'Secret Access Key', "
+                    "or the Account ID belongs to a different account.",
+    "InvalidAccessKeyId": "The Access Key ID is not recognised - copy it again from the R2 API token screen.",
+    "SignatureDoesNotMatch": "The Secret Access Key doesn't match the Access Key ID - copy both again.",
+    "AccessDenied": "The token doesn't have permission for this bucket - give it 'Object Read & Write' and include "
+                    "this bucket.",
+    "NoSuchBucket": "No bucket with that name in this account - check R2_BUCKET (or, for an EU bucket, set "
+                    "R2_ENDPOINT to https://<account-id>.eu.r2.cloudflarestorage.com).",
+}
+
+
+def explain(error: str) -> str:
+    return next((h for code, h in HINTS.items() if code in error), "")
+
+
+def test_connection() -> tuple[bool, str]:
+    try:
+        client().list_objects_v2(Bucket=_bucket(), MaxKeys=1)
+        return True, f"Connected to bucket '{_bucket()}'."
+    except Exception as e:
+        msg = f"{type(e).__name__}: {str(e)[:200]}"
+        return False, msg + (f" - {explain(msg)}" if explain(msg) else "")
 
 
 # ---- paths --------------------------------------------------------------------------------
@@ -107,7 +174,7 @@ def _remote_objects() -> dict[str, dict]:
     prefix = _key("")
     out, token = {}, None
     while True:
-        kw = {"Bucket": config.R2_BUCKET, "Prefix": prefix}
+        kw = {"Bucket": _bucket(), "Prefix": prefix}
         if token:
             kw["ContinuationToken"] = token
         resp = client().list_objects_v2(**kw)
@@ -139,7 +206,7 @@ def restore(progress=lambda msg: None) -> dict:
                 continue
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".part")
-        client().download_file(config.R2_BUCKET, _key(r), str(tmp))
+        client().download_file(_bucket(), _key(r), str(tmp))
         tmp.replace(p)
         os.utime(p, (o["mtime"], o["mtime"]))
         st = p.stat()
@@ -169,11 +236,11 @@ def sync_up() -> dict:
         if idx.get(r) == sig:
             continue
         ctype = mimetypes.guess_type(r)[0] or "application/octet-stream"
-        client().upload_file(str(config.DATA / r), config.R2_BUCKET, _key(r), ExtraArgs={"ContentType": ctype})
+        client().upload_file(str(config.DATA / r), _bucket(), _key(r), ExtraArgs={"ContentType": ctype})
         idx[r] = sig
         up += 1
     for r in [r for r in idx if r not in files]:
-        client().delete_object(Bucket=config.R2_BUCKET, Key=_key(r))
+        client().delete_object(Bucket=_bucket(), Key=_key(r))
         idx.pop(r)
         de += 1
     _save_index(idx)
@@ -216,7 +283,7 @@ def remote_url(path: Path, download_name: str | None = None, expires: int = 3600
     """Temporary private link to a file that lives only in R2 (e.g. an older rendered video)."""
     if not enabled():
         return None
-    params = {"Bucket": config.R2_BUCKET, "Key": _key(rel(path))}
+    params = {"Bucket": _bucket(), "Key": _key(rel(path))}
     if download_name:
         params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
     return client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires)
@@ -226,7 +293,7 @@ def in_cloud(path: Path) -> bool:
     if not enabled():
         return False
     try:
-        client().head_object(Bucket=config.R2_BUCKET, Key=_key(rel(path)))
+        client().head_object(Bucket=_bucket(), Key=_key(rel(path)))
         return True
     except Exception:
         return False
@@ -240,7 +307,7 @@ def fetch(path: Path) -> bool:
         return False
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        client().download_file(config.R2_BUCKET, _key(rel(path)), str(path))
+        client().download_file(_bucket(), _key(rel(path)), str(path))
         return True
     except Exception:
         return False
@@ -311,7 +378,7 @@ def status() -> dict:
     """What the Backup & storage panel shows."""
     out = dict(state)
     out["enabled"] = enabled()
-    out["bucket"] = config.R2_BUCKET
+    out["bucket"] = _bucket()
     out["local_files"] = len(_local_files())
     out["local_mb"] = round(sum(v[0] for v in _local_files().values()) / 1e6, 1)
     return out
