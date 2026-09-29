@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from . import book as bk, budget, config, ffmpeg_utils as ff, qa, sfx, visuals, voice
+from . import book as bk, brand, budget, config, ffmpeg_utils as ff, music as musiclib, myvoice, qa, sfx, visuals, voice
 from .genres import GENRES
 from .transcribe import align_words
 
@@ -748,10 +748,23 @@ def voiced(s: dict) -> bool:
 
 
 def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets: Path, progress,
-                  genre: str = "fiction") -> tuple:
-    """Record narration (one take per run of voiced scenes, so it flows naturally), then time each scene to it."""
+                  genre: str = "fiction", own: Path | None = None) -> tuple:
+    """Record narration (one take per run of voiced scenes, so it flows naturally), then time each scene to it.
+    With `own` (the user's recording of the whole script) that recording is cut up instead of using the AI voice."""
     t, clips, words_all = 0.0, [], []
     i = 0
+    mine = []
+    if own:
+        runs, cur = [], []
+        for s in scenes:
+            if voiced(s):
+                cur.append(s["voiceover"].strip())
+            elif cur:
+                runs.append(cur)
+                cur = []
+        if cur:
+            runs.append(cur)
+        mine = myvoice.takes(Path(own), runs, assets, progress)
     while i < len(scenes):
         if not voiced(scenes[i]):
             d = min(max(float(scenes[i].get("seconds") or SILENT_DEFAULT), 1.5), 8.0)
@@ -764,11 +777,15 @@ def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets
             j += 1
         run = scenes[i:j]
         text = " ".join(s["voiceover"].strip() for s in run)
-        progress("Recording the voiceover...")
-        wav = voice.speak(text, voice_name, instructions, assets, genre)
-        adur = ff.duration(wav)
-        progress("Syncing captions to the voice (runs on your PC)...")
-        words = align_words(text, wav, voice.timings(wav))
+        if mine:
+            wav, words = mine.pop(0)
+            adur = ff.duration(wav)
+        else:
+            progress("Recording the voiceover...")
+            wav = voice.speak(text, voice_name, instructions, assets, genre)
+            adur = ff.duration(wav)
+            progress("Syncing captions to the voice (runs on your PC)...")
+            words = align_words(text, wav, voice.timings(wav))
         base = t + LEAD
         clips.append((wav, base))
         idx, starts = 0, []
@@ -792,7 +809,7 @@ def plan_timeline(scenes: list[dict], voice_name: str, instructions: str, assets
     return t, clips, words_all
 
 
-def estimate(book: dict, variant: dict, quality_check: bool = True) -> dict:
+def estimate(book: dict, variant: dict, quality_check: bool = True, own_voice: bool = False) -> dict:
     """Upper-bound cost of rendering (already-made images/clips are reused for free)."""
     g = GENRES[book["genre"]]
     scenes = variant.get("scenes", [])
@@ -805,7 +822,7 @@ def estimate(book: dict, variant: dict, quality_check: bool = True) -> dict:
     vid_secs = sum(min(10, max(2, round(float(s.get("seconds") or 4) + 1)))
                    for s in scenes if s.get("visual") == "ai_video")
     out = {
-        "voice": budget.tts_cost(config.TTS_MODEL, chars),
+        "voice": 0.0 if own_voice else budget.tts_cost(config.TTS_MODEL, chars),
         "images": n_img * budget.image_cost(config.IMAGE_MODEL, config.IMAGE_QUALITY),
         "ai_video": budget.video_cost(config.VIDEO_MODEL, vid_secs) if vid_secs else 0.0,
     }
@@ -924,6 +941,8 @@ def _segment(s: dict, idx: int, f0: int, f1: int, cap, out: Path, tick) -> None:
                     ci = cap.image(f / FPS)
                     if ci is not None:
                         paste_center(frame, ci, s["cap_y"])
+                if s.get("mark") is not None:
+                    frame.paste(s["mark"][0], s["mark"][1], s["mark"][0])
                 enc.stdin.write(frame.tobytes())
                 tick()
         finally:
@@ -979,18 +998,22 @@ def _look_through(book, scenes, segs, bounds, cap, desk, assets, warn, progress,
 
 
 def render(book: dict, variant: dict, voice_name: str | None = None, captions: bool = True,
-           music: Path | None = None, music_volume: float = 0.25, page_sound: bool = True,
+           music: Path | str | None = None, music_volume: float = 0.25, page_sound: bool = True,
            quality_check: bool = True, video_retries: int = 1, draft: bool = False,
-           progress=lambda msg, frac=None: None, redo_of: str | None = None) -> Path:
+           progress=lambda msg, frac=None: None, redo_of: str | None = None,
+           own_voice: Path | str | None = None, use_brand: bool = True) -> Path:
     g = GENRES[book["genre"]]
     use_size(draft)
-    options = {"voice_name": voice_name, "captions": captions, "music": str(music) if music else None,
+    music_file = musiclib.resolve(music)
+    own = Path(own_voice) if own_voice and Path(own_voice).exists() else None
+    options = {"voice_name": voice_name, "captions": captions, "music": str(music) if music_file else None,
                "music_volume": music_volume, "page_sound": page_sound, "quality_check": quality_check,
-               "video_retries": video_retries, "draft": draft}
+               "video_retries": video_retries, "draft": draft, "own_voice": str(own) if own else None,
+               "use_brand": use_brand}
     scenes = [dict(s) for s in variant.get("scenes", []) if s]
     if not scenes:
         raise ValueError("This script has no scenes.")
-    est = estimate(book, variant, quality_check)
+    est = estimate(book, variant, quality_check, bool(own))
     budget.guard(est["total"] * 0.5, "render (voice + images + video)")  # each call is guarded again as it happens
     spent_before = budget.spent_this_month()
 
@@ -1005,7 +1028,8 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         progress(msg)
 
     voice_name = voice_name or voice.default_voice(book["genre"])
-    total, clips, words = plan_timeline(scenes, voice_name, g["voice_instructions"], assets, progress, book["genre"])
+    total, clips, words = plan_timeline(scenes, voice_name, g["voice_instructions"], assets, progress, book["genre"],
+                                        own)
 
     progress("Setting up the desk...")
     if not book.get("background") and (config.OPENAI_API_KEY or config.XAI_API_KEY):
@@ -1021,10 +1045,16 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         s["src"] = build_source(book, s, i, desk, assets, warn, progress, **make)
 
     # text layers
-    accent = ass_to_rgb(g["accent"])
+    kit = brand.load() if use_brand else dict(brand.DEFAULTS)
+    accent = brand.accent_rgb(ass_to_rgb(g["accent"]), kit)
+    cap_font = brand.caption_font(g["caption_font"], kit)
+    mark = brand.watermark((W, H), K, kit)
     poetic = book["genre"] == "poetry"
     for i, s in enumerate(scenes):
         ov = (s.get("overlay") or "").strip()
+        if kit["cta"] and kit["cta_on_end"] and i == len(scenes) - 1:
+            ov = kit["cta"].strip()
+        s["mark"] = mark
         if book["genre"] == "medical" and i == len(scenes) - 1 and "not medical advice" not in ov.lower():
             s["footer"] = text_card("Educational only - not medical advice.", "Arial", int(30 * K), "shadow",
                                     int(900 * K))
@@ -1035,7 +1065,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         desky = s.get("visual") in ("page", "flip", "cover")
         s["ov_y"] = H * (0.13 if desky else 0.17)
         s["cap_y"] = H * (0.77 if desky else 0.64)
-    cap = Captions(words, g["caption_font"], accent, g["caption_font"] == "Arial Black") if captions and words else None
+    cap = Captions(words, cap_font, accent, cap_font == "Arial Black") if captions and words else None
 
     sfx_clips = []
     if page_sound:
@@ -1080,15 +1110,18 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
 
     progress("Mixing voice, music and sound...", 0.95)
     final = out_dir / "final.mp4"
-    mix_audio(silent, clips, sfx_clips, music, music_volume, total, final)
+    mix_audio(silent, clips, sfx_clips, music_file, music_volume, total, final)
     silent.unlink(missing_ok=True)
 
+    (out_dir / "words.json").write_text(json.dumps(words), encoding="utf-8")
+    music_label = (musiclib.STYLES[str(music).split(":", 1)[1]]["label"] + " (built-in)"
+                   if music_file and str(music).startswith("builtin:") else music_file.name if music_file else None)
     meta = {
         "created": datetime.now().isoformat(timespec="seconds"),
         "book": book["id"], "variant": {k: v for k, v in variant.items()},
         "timeline": [{k: s[k] for k in ("beat", "visual", "start", "dur") if k in s} for s in scenes],
-        "seconds": round(total, 2), "voice": voice_name or g["voice"], "captions": captions,
-        "music": music.name if music else None, "cost": round(budget.spent_this_month() - spent_before, 4),
+        "seconds": round(total, 2), "voice": "My own voice" if own else (voice_name or g["voice"]),
+        "captions": captions, "own_voice": bool(own), "music": music_label, "cost": round(budget.spent_this_month() - spent_before, 4),
         "warnings": warnings, "file": final.name,
         "quality": {"shots": qa_reports, "final": final_check} if quality_check else None,
         "options": options, "draft": draft, "redo_of": redo_of,
@@ -1132,8 +1165,8 @@ def redo_scene(book: dict, render_dir: str, scene: int, prompt: str = "", progre
     s["_take"] = s.get("_take", 0) + 20                          # always a fresh AI shot
     variant["name"] = (meta["variant"].get("name") or "video").split(" · redo")[0] + f" · redo {scene + 1}"
     opts = dict(meta.get("options") or {"voice_name": meta.get("voice"), "captions": meta.get("captions", True)})
-    if opts.get("music"):
-        opts["music"] = Path(opts["music"]) if Path(opts["music"]).exists() else None
+    if opts.get("music") and not musiclib.resolve(opts["music"]):
+        opts["music"] = None
     return render(book, variant, progress=progress, redo_of=Path(render_dir).name, **opts)
 
 

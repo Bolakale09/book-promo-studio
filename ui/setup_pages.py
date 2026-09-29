@@ -37,11 +37,19 @@ def home() -> None:
 
     scripts = script.load_scripts(b["id"])
     renders = render.list_renders(b["id"])
-    best = max((r.get("views", 0) for r in renders), default=0)
+    best = max((r.get("views") or 0 for r in renders), default=0)
     from promo import budget
     t.stats([("Scripts", str(len(scripts)), "ready to render"), ("Videos", str(len(renders)), "rendered"),
              ("Best views", f"{best:,}", "log views in Videos"),
              ("Spent this month", money(budget.spent_this_month()), f"of {money(config.MONTHLY_BUDGET_USD)}")])
+    from promo import schedule
+    due = schedule.due(schedule.load(b["id"]))
+    if due:
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        c1.info(f"📣 {len(due)} post(s) are due: {due[0]['title']} on {due[0]['platform']}"
+                + (f" and {len(due) - 1} more" if len(due) > 1 else ""))
+        if c2.button("Open calendar", width="stretch"):
+            go("calendar")
     st.write("")
     quick_video_card(b)
 

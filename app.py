@@ -9,6 +9,7 @@ import streamlit as st
 
 from promo import storage
 from ui import common, theme
+from ui.grow_pages import brand_page, calendar_page, results_page
 from ui.create_pages import render_page, scripts_page, videos_page
 from ui.manage_pages import backup_page
 from ui.setup_pages import book_page, characters_page, formats_page, home, pages_page
@@ -77,9 +78,19 @@ common.PAGES.update({
     "scripts": st.Page(scripts_page, title="5 Scripts", icon="✍️", url_path="scripts"),
     "render": st.Page(render_page, title="6 Render", icon="🎬", url_path="render"),
     "videos": st.Page(videos_page, title="7 Videos", icon="📂", url_path="videos"),
+    "brand": st.Page(brand_page, title="Brand kit", icon="🎨", url_path="brand"),
+    "calendar": st.Page(calendar_page, title="Calendar", icon="📅", url_path="calendar"),
+    "results": st.Page(results_page, title="Results", icon="📈", url_path="results"),
     "backup": st.Page(backup_page, title="Backup & storage", icon="💾", url_path="backup", visibility="hidden"),
 })
-nav = st.navigation(list(common.PAGES.values()), position="top")
+P = common.PAGES
+nav = st.navigation({
+    "": [P["home"]],
+    "Set up": [P["book"], P["characters"], P["pages"], P["formats"], P["brand"]],
+    "Make": [P["scripts"], P["render"]],
+    "Publish": [P["videos"], P["calendar"], P["results"]],
+    "Other": [P["backup"]],
+}, position="top")
 common.sidebar()
 try:
     nav.run()

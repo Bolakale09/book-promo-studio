@@ -20,7 +20,7 @@ STALE_SECONDS = 15 * 60  # no progress for this long = the worker died
 HEAVY = {"render", "quick", "redo"}
 LABELS = {"render": "Rendering", "quick": "Quick video", "redo": "Redoing a scene", "scripts": "Writing scripts",
           "variations": "Writing variations", "digest": "Reading the manuscript", "portrait": "Creating a portrait",
-          "desk": "Creating a desk photo"}
+          "desk": "Creating a desk photo", "kit": "Making the posting kit", "hooks": "Testing hooks"}
 
 
 def _write(d: Path, **status) -> None:
@@ -135,8 +135,6 @@ def _run(d: Path) -> None:
         result = ""
         if kind == "render":
             opts = dict(payload.get("options") or {})
-            if opts.get("music"):
-                opts["music"] = Path(opts["music"])
             render.render(book, payload["variant"], progress=progress, **opts)
             result = f"Video '{base['name']}'"
         elif kind == "redo":
@@ -148,12 +146,23 @@ def _run(d: Path) -> None:
             result = "Your quick video"
         elif kind == "scripts":
             variants = script.generate(book, payload["blueprint"], **payload.get("args", {}))
+            if payload.get("hook_test") and variants:
+                variants = _test_hooks(book, variants, progress)
             script.add_scripts(book["id"], variants, payload.get("source", "builtin"))
             result = f"{len(variants)} new scripts"
         elif kind == "variations":
             variants = script.variations(book, payload["winner"], payload["change"])
             script.add_scripts(book["id"], variants, f"variation of {payload['winner'].get('name')}")
             result = f"{len(variants)} variations"
+        elif kind == "kit":
+            from . import kit
+            kit.make_videos(payload["render_dir"], payload.get("ratios") or ["4:5", "1:1"],
+                            payload.get("mode", "fit"), progress)
+            result = "Posting kit videos"
+        elif kind == "hooks":
+            from . import hooks
+            n = hooks.run_lab(book, int(payload.get("n", 8)), payload.get("custom"), progress)
+            result = f"{n} hooks tested"
         elif kind == "digest":
             bk.build_digest(book)
             result = "Manuscript read"
@@ -179,6 +188,17 @@ def _run(d: Path) -> None:
         _write(d, state="error", msg="Failed", frac=last["frac"], error=f"{type(e).__name__}: {e}", **base)
 
 
+def _test_hooks(book: dict, variants: list[dict], progress) -> list[dict]:
+    """Automatic hook testing: never blocks the scripts if the test itself fails."""
+    from . import hooks
+    try:
+        progress("Testing the hooks...", 0.6)
+        hooks.auto_swap(book, variants, progress=progress)
+    except Exception:
+        traceback.print_exc()
+    return variants
+
+
 def _quick_video(book: dict, payload: dict, progress) -> Path:
     """One click: read the book (if needed) -> write scripts -> render the strongest."""
     from . import book as bk, render, script
@@ -193,6 +213,8 @@ def _quick_video(book: dict, payload: dict, progress) -> Path:
     variants = script.generate(book, default_blueprint(book["genre"]), **args)
     if not variants:
         raise RuntimeError("The AI didn't return any scripts - try again.")
+    if payload.get("hook_test", True):
+        variants = _test_hooks(book, variants, progress)
     script.add_scripts(book["id"], variants, "quick video")
     best = variants[0]  # the script writer lists the strongest first
     progress(f"Rendering '{best.get('name')}'...", 0.12)

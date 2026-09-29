@@ -7,12 +7,13 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image, ImageDraw
 
-from promo import analyze, book as bk, budget, config, jobs, render, script, voice
+from promo import analyze, book as bk, brand, budget, config, hooks as hooklib, jobs, myvoice, render, results, script, voice
 from promo.genres import GENRES, default_blueprint
 
 from . import theme as t
 from .common import (MUSIC_EXT, frame_to_scenes, go, image_price, money, need_book, next_step, run_safely,
                      scenes_frame, start_task, task_panel, video_src)
+from .grow_pages import hook_chip, hook_lab, kit_dialog, music_picker, own_voice_block
 
 VISUALS = list(script.VISUAL_TYPES)
 MIXES = {"💸 Free only": (True, 0), "⚖️ Balanced": (False, 1), "🎬 Cinematic": (False, 2)}
@@ -119,17 +120,21 @@ def scripts_page() -> None:
         ready = b.get("digest") or b.get("blurb")
         if not ready:
             st.info("Add a blurb or run the AI read-through in Step 1 first.")
+        test_hooks = st.checkbox("Test the hooks and swap in a stronger one automatically (about 3¢)", True,
+                                 help="A panel of imagined viewers scores each script's opening against fresh ideas. "
+                                      "A clearly better hook replaces the weaker one, and you can undo it.")
         writing = bool(jobs.active(b["id"], {"scripts"}))
         if st.button(f"✨ Write {n} scripts", type="primary", disabled=not ready or writing):
             start_task("scripts", b["id"], f"{n} scripts", {
-                "blueprint": blueprint, "source": blueprint.get("source", "builtin"),
+                "blueprint": blueprint, "source": blueprint.get("source", "builtin"), "hook_test": test_hooks,
                 "args": {"n": int(n), "max_ai_video": max_ai_video, "notes": notes,
                          "has_broll": bool(render._broll_clips(b)), "has_stock": bool(config.PEXELS_API_KEY),
                          "focus_characters": focus_chars, "focus_pages": [feats[i] for i in focus_pages],
                          "free_only": free_only}})
-        task_panel(b["id"], {"scripts", "variations"})
+        task_panel(b["id"], {"scripts", "variations", "hooks"})
 
     scripts = script.load_scripts(b["id"])
+    hook_lab(b, scripts)
     st.write("")
     c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
     c1.markdown(f"#### Your scripts ({len(scripts)})")
@@ -148,7 +153,7 @@ def scripts_page() -> None:
                 t.md(f'<div class="bps-card-title">{t.esc(v.get("name", "Script"))}</div>')
                 t.chips([(v.get("hook_type", "hook"), "gold"), (f"{len(scenes)} scenes", ""), (f"~{secs:.0f}s", ""),
                          (f"≤ {money(est['total'])}", "green" if est["total"] < 0.05 else ""),
-                         (v.get("created", ""), "")])
+                         (v.get("created", ""), "")] + ([hook_chip(v)] if hook_chip(v) else []))
                 hook = next((s for s in scenes if s.get("voiceover") or s.get("overlay")), {})
                 t.md(f'<div class="bps-quote">{t.esc(hook.get("overlay") or hook.get("voiceover"))}</div>')
                 st.caption(f"Angle: {v.get('angle', '')}")
@@ -157,6 +162,12 @@ def scripts_page() -> None:
                     go("render", render_pick=v.get("id"))
                 with st.popover("⋯ More", width="stretch"):
                     st.caption(v.get("why_it_will_work", ""))
+                    ht = v.get("hook_test") or {}
+                    if ht.get("swapped") and ht.get("original") and st.button("↩ Restore the original hook", key=f"undo_{i}",
+                                                                              width="stretch"):
+                        hooklib.undo_swap(v)
+                        script.save_scripts(b["id"], scripts)
+                        st.rerun()
                     if st.button("📄 Duplicate", key=f"dup_{i}", width="stretch"):
                         copy = {k: val for k, val in v.items() if k != "id"}
                         copy["name"] = v.get("name", "Script") + " (copy)"
@@ -244,20 +255,27 @@ def render_page() -> None:
     with right:
         with st.container(border=True):
             st.markdown("#### 🎙 Sound")
+            narr = st.segmented_control("Narrator", ["🤖 AI voice", "🎙 My own voice"], default="🤖 AI voice",
+                                        key="narr_mode") or "🤖 AI voice"
+            own_mode = narr.startswith("🎙")
             vlist = voice.voices()
             vdefault = voice.default_voice(b["genre"])
-            c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
-            vname = c1.selectbox(f"Narrator ({config.TTS_PROVIDER})", vlist,
-                                 vlist.index(vdefault) if vdefault in vlist else 0)
-            if c2.button("▶", help="Hear this voice (~$0.0003)", width="stretch"):
-                wav = run_safely(voice.speak, f"This is the voice for {b['title']}.", vname, g["voice_instructions"],
-                                 bk.book_dir(b["id"]), b["genre"])
-                if wav:
-                    st.audio(str(wav), autoplay=True)
-            tracks = sorted(p for p in config.MUSIC_DIR.glob("*") if p.suffix.lower() in MUSIC_EXT)
-            music = st.selectbox("Music", [None] + tracks, format_func=lambda p: "No music" if p is None else p.name)
+            vname = vdefault if vdefault in vlist else (vlist[0] if vlist else None)
+            own_path, own_problem = None, ""
+            if own_mode:
+                own_path, own_problem = own_voice_block(b, v)
+            else:
+                c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+                vname = c1.selectbox(f"Narrator ({config.TTS_PROVIDER})", vlist,
+                                     vlist.index(vdefault) if vdefault in vlist else 0)
+                if c2.button("▶", help="Hear this voice (~$0.0003)", width="stretch"):
+                    wav = run_safely(voice.speak, f"This is the voice for {b['title']}.", vname, g["voice_instructions"],
+                                     bk.book_dir(b["id"]), b["genre"])
+                    if wav:
+                        st.audio(str(wav), autoplay=True)
+            music, _ = music_picker(b["genre"])
             vol = st.slider("Music volume", 0.05, 0.6, 0.25, 0.05, disabled=music is None)
-            with st.popover("➕ Add a music track", width="stretch"):
+            with st.popover("➕ Add my own music track", width="stretch"):
                 up = st.file_uploader(f"Royalty-free, {g['music_mood']} mood fits", list(e[1:] for e in MUSIC_EXT))
                 if up and st.button("Save track", type="primary"):
                     (config.MUSIC_DIR / Path(up.name).name).write_bytes(up.getbuffer())
@@ -265,6 +283,12 @@ def render_page() -> None:
             c1, c2 = st.columns(2)
             captions = c1.toggle("Captions", True)
             page_sound = c2.toggle("Page-turn sound", True)
+            use_brand = st.toggle("Apply my brand kit", brand.is_set(), disabled=not brand.is_set(),
+                                  help="Your handle/logo watermark, caption colour and font, and call-to-action.")
+            if not brand.is_set():
+                st.caption("No brand kit yet - set your handle and logo once and every video will carry them.")
+                if st.button("🎨 Set up my brand kit", width="stretch"):
+                    go("brand")
 
         with st.container(border=True):
             st.markdown("#### 🔍 AI quality check")
@@ -278,7 +302,7 @@ def render_page() -> None:
                               help="Great for checking a script. Render the final in full quality once you like it - "
                                    "AI shots and voice are reused, so the final costs nothing extra.")
 
-        est = render.estimate(b, v, quality)
+        est = render.estimate(b, v, quality, own_mode)
         left_budget = budget.remaining()
         with st.container(border=True):
             parts = [("Voice", est["voice"]), ("AI photos", est["images"]), ("AI video", est["ai_video"])]
@@ -291,11 +315,13 @@ def render_page() -> None:
                    f'already made are reused free</div>')
             busy = bool(jobs.queue())
             over = est["total"] > left_budget
-            opts = {"voice_name": vname, "captions": captions, "music": str(music) if music else None,
+            opts = {"voice_name": vname, "captions": captions, "music": music,
                     "music_volume": vol, "page_sound": page_sound, "quality_check": quality,
-                    "video_retries": video_retries, "draft": draft}
+                    "video_retries": video_retries, "draft": draft, "use_brand": use_brand,
+                    "own_voice": str(own_path) if own_path and not own_problem else None}
+            blocked = own_mode and (own_path is None or bool(own_problem))
             label = ("➕ Add to render queue" if busy else "🎬 Render video") + (" (draft)" if draft else "")
-            if st.button(label, type="primary", width="stretch", disabled=over):
+            if st.button(label, type="primary", width="stretch", disabled=over or blocked):
                 jobs.start_render(b["id"], v, opts)
                 st.toast("Added to the queue" if busy else "Rendering started - a few minutes", icon="🎬")
                 time.sleep(0.8)
@@ -305,10 +331,23 @@ def render_page() -> None:
             with st.popover("🎬 Render several scripts", width="stretch"):
                 many = st.multiselect("Scripts to queue (same sound & quality settings)", range(len(scripts)),
                                       format_func=lambda i: scripts[i].get("name", f"Script {i + 1}"))
+                if own_mode:
+                    st.caption("With your own voice, each script needs its own recording; scripts without one are skipped.")
                 if st.button(f"Queue {len(many)} render(s)", type="primary", disabled=not many or over):
+                    queued, skipped = 0, []
                     for i in many:
-                        jobs.start_render(b["id"], scripts[i], opts)
-                    st.toast(f"{len(many)} renders queued", icon="🎬")
+                        o = dict(opts)
+                        if own_mode:
+                            inf = myvoice.info(b["id"], scripts[i]["id"], scripts[i])
+                            if not inf or inf.get("script_changed"):
+                                skipped.append(scripts[i].get("name", f"Script {i + 1}"))
+                                continue
+                            o["own_voice"] = inf["path"]
+                        jobs.start_render(b["id"], scripts[i], o)
+                        queued += 1
+                    if skipped:
+                        st.warning("No usable recording for: " + ", ".join(skipped))
+                    st.toast(f"{queued} renders queued", icon="🎬")
                     time.sleep(0.8)
                     st.rerun()
             if over:
@@ -352,7 +391,7 @@ def videos_page() -> None:
     b = need_book()
     t.header("Step 7 · Videos", "Post, measure, clone the winner",
              "Post several, log their views, then make variations of the best one that change ONE thing.")
-    task_panel(b["id"], jobs.HEAVY | {"variations"})
+    task_panel(b["id"], jobs.HEAVY | {"variations", "kit"})
     renders = render.list_renders(b["id"])
     if not renders:
         t.empty("🎬", "Rendered videos appear here.")
@@ -378,8 +417,9 @@ def videos_page() -> None:
                     st.caption("🎬 Video file not found on this server or in cloud storage.")
                 t.md(f'<div class="bps-card-title">{"🏆 " if r.get("winner") else ""}{t.esc(v.get("name"))}</div>')
                 t.chips([(f"{r['seconds']:.0f}s", ""), (money(r.get("cost", 0)), ""), _quality_chip(r.get("quality")),
-                         (f"👁 {r.get('views', 0):,}", "gold" if r.get("views") else "")]
-                        + ([("Draft 720p", "blue")] if r.get("draft") else []))
+                         (f"👁 {(r.get('views') or 0):,}", "gold" if r.get("views") else "")]
+                        + ([("Draft 720p", "blue")] if r.get("draft") else [])
+                        + ([("🎙 own voice", "")] if r.get("own_voice") else []))
                 if r.get("warnings"):
                     st.caption(f"⚠ {len(r['warnings'])} note(s) - see Details")
                 if Path(r["path"]).exists():
@@ -388,14 +428,26 @@ def videos_page() -> None:
                 elif src:  # lives in cloud storage: download straight from there
                     st.link_button("⬇ Download MP4", video_src(r["path"], fname), type="primary", width="stretch")
                 c1, c2 = st.columns(2)
+                if c1.button("📦 Posting kit", key=f"kit_{k}", width="stretch",
+                             help="Cover image, captions file, post text, 4:5 and 1:1 versions"):
+                    kit_dialog(b, r)
+                if c2.button("📅 Schedule", key=f"sched_{k}", width="stretch"):
+                    go("calendar")
+                c1, c2 = st.columns(2)
                 with c1.popover("📋 Caption", width="stretch"):
                     st.code(f"{v.get('post_caption', '')}\n\n{' '.join(v.get('hashtags', []))}", language=None)
                 with c2.popover("📈 Results", width="stretch"):
-                    views = st.number_input("Views", 0, value=int(r.get("views", 0)), key=f"views_{k}")
-                    likes = st.number_input("Likes", 0, value=int(r.get("likes", 0)), key=f"likes_{k}")
+                    nums = {}
+                    for (a, b_), (lab_a, lab_b) in [(("views", "likes"), ("Views", "Likes")),
+                                                    (("comments", "shares"), ("Comments", "Shares")),
+                                                    (("saves", "clicks"), ("Saves", "Link clicks"))]:
+                        ca, cb = st.columns(2)
+                        nums[a] = ca.number_input(lab_a, 0, value=int(r.get(a) or 0), key=f"{a}_{k}")
+                        nums[b_] = cb.number_input(lab_b, 0, value=int(r.get(b_) or 0), key=f"{b_}_{k}")
+                    nums["sales"] = st.number_input("Sales", 0, value=int(r.get("sales") or 0), key=f"sales_{k}")
                     winner = st.checkbox("🏆 Winner", r.get("winner", False), key=f"win_{k}")
                     if st.button("Save", key=f"savestats_{k}", type="primary", width="stretch"):
-                        render.update_render(k, views=views, likes=likes, winner=winner)
+                        results.save_metrics(k, winner=winner, **nums)
                         st.rerun()
                 c1, c2 = st.columns(2)
                 with c1.popover("🔁 Redo a scene", width="stretch"):

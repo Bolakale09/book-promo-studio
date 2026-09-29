@@ -23,7 +23,7 @@ from pathlib import Path
 from . import config
 
 INDEX = config.DATA / ".sync_index.json"
-SKIP_DIRS = ("jobs/", "sfx/", "references/", "_backups/")  # temporary/re-creatable; backups are handled apart
+SKIP_DIRS = ("jobs/", "sfx/", "references/", "_backups/", "musicgen/")  # temporary/re-creatable; backups are handled apart
 SKIP_NAMES = {"pages.json", "video_only.mp4", "segments.txt", ".sync_index.json", ".restored"}
 MARKER = config.DATA / ".restored"  # this server holds the restored library -> safe to upload
 SKIP_SUFFIXES = (".tmp", ".part")
@@ -169,7 +169,8 @@ def _key(r: str) -> str:
 def _skip(r: str) -> bool:
     name = r.rsplit("/", 1)[-1]
     return (r.startswith(SKIP_DIRS) or name in SKIP_NAMES or name.endswith(SKIP_SUFFIXES)
-            or name.startswith("seg_") or (r.startswith("projects/") and name.endswith(".jpg")))
+            or name.startswith(("seg_", "mine_")) or "/kit/" in r
+            or (r.startswith("projects/") and name.endswith(".jpg")))
 
 
 def _local_files() -> dict[str, list]:

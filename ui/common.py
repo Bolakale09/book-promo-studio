@@ -115,6 +115,8 @@ def book_progress(b: dict) -> list[dict]:
     ms = bk.path(b, "manuscript")
     scripts = script.load_scripts(b["id"])
     renders = render.list_renders(b["id"])
+    from promo import brand, schedule
+    plan = schedule.load(b["id"])
     return [
         {"label": "Details & genre", "done": bool(b.get("blurb") or b.get("author")), "page": "book"},
         {"label": "Cover uploaded", "done": bool(bk.path(b, "cover")), "page": "book"},
@@ -124,6 +126,9 @@ def book_progress(b: dict) -> list[dict]:
         {"label": "Pages & lines to feature", "done": bool(b.get("featured")), "page": "pages", "optional": True},
         {"label": "Scripts written", "done": bool(scripts), "page": "scripts"},
         {"label": "First video rendered", "done": bool(renders), "page": "render"},
+        {"label": "Brand kit (handle, logo, colours)", "done": brand.is_set(), "page": "brand", "optional": True},
+        {"label": "Posts planned in the calendar", "done": bool(plan), "page": "calendar", "optional": True},
+        {"label": "Results logged", "done": any(r.get("views") for r in renders), "page": "results", "optional": True},
     ]
 
 
@@ -211,7 +216,7 @@ def _announce_finished(bid: str) -> bool:
             new = True
             if s["state"] == "done":
                 where = {"render": "Videos", "quick": "Videos", "redo": "Videos", "scripts": "Scripts",
-                         "variations": "Scripts"}.get(s.get("kind"), "")
+                         "variations": "Scripts", "hooks": "Scripts", "kit": "Videos"}.get(s.get("kind"), "")
                 st.toast(f"✅ {s.get('result') or s.get('name')} - ready" + (f" in {where}" if where else ""), icon="✅")
             else:
                 st.toast(f"❌ {jobs.LABELS.get(s.get('kind'), 'Task')} failed: {s.get('error', '')[:120]}", icon="❌")
