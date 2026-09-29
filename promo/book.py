@@ -186,8 +186,20 @@ Give 12-20 quotes spread across the book, the most emotional / surprising / usef
     for q in digest.get("quotes", []):  # make sure the page numbers are right
         q["page"] = find_quote_page(book, q.get("text", ""), q.get("page"))
     book["digest"] = digest
-    save(book)
+    fresh = load(book["id"])  # this can take a minute: keep any edits made in the meantime
+    fresh["digest"] = digest
+    save(fresh)
     return digest
+
+
+def delete_book(book_id: str) -> None:
+    """Remove a book with its scripts and videos, here and in cloud storage."""
+    import shutil
+    from . import storage
+    for d in (config.BOOKS_DIR / book_id, config.PROJECTS_DIR / book_id):
+        if d.exists():
+            shutil.rmtree(d)
+        storage.delete_remote_folder(d)
 
 
 # ---- page images (the "page-to-page" shots) ------------------------------------

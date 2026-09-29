@@ -9,6 +9,7 @@ from promo.genres import GENRES
 
 from . import theme as t
 from .common import (PAGES, go, image_price, money, need_book, next_step, book_progress, run_safely, save_upload,
+                     start_task, task_panel,
                      sentences, video_src)
 
 
@@ -42,6 +43,7 @@ def home() -> None:
              ("Best views", f"{best:,}", "log views in Videos"),
              ("Spent this month", money(budget.spent_this_month()), f"of {money(config.MONTHLY_BUDGET_USD)}")])
     st.write("")
+    quick_video_card(b)
 
     left, right = st.columns([5, 4], gap="large")
     with left:
@@ -69,9 +71,7 @@ def home() -> None:
     with right:
         with st.container(border=True):
             st.markdown("#### Latest videos")
-            active = [s for s in jobs.recent(b["id"], 3) if s["state"] in ("queued", "running")]
-            for s in active:
-                st.progress(float(s.get("frac") or 0), text=f"🎬 Rendering '{s.get('name')}' - {s.get('msg')}")
+            active = jobs.active(b["id"], jobs.HEAVY)
             if renders:
                 cols = st.columns(2)
                 for col, r in zip(cols, renders[:2]):
@@ -90,6 +90,39 @@ def home() -> None:
                 q = d["quotes"][0]
                 t.md(f'<div class="bps-quote">“{t.esc(q.get("text"))}”</div>'
                      f'<div class="bps-muted">page {q.get("page")} · {t.esc(q.get("why", ""))}</div>')
+
+
+QUICK_MIXES = {"💸 Free only": (True, 0), "⚖️ Balanced": (False, 1)}
+
+
+def quick_video_card(b: dict) -> None:
+    """One click: read the book (if needed) -> write 3 scripts -> render the strongest."""
+    ms = bk.path(b, "manuscript")
+    if not (b.get("blurb") or (ms and ms.exists())):
+        return
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 2], vertical_alignment="center")
+        with c1:
+            st.markdown("#### ⚡ Quick video")
+            st.caption(("Reads your manuscript, " if not b.get("digest") and ms else "") + "writes 3 scripts and "
+                       "renders the strongest one - all in the background. Fine-tune later in Scripts.")
+            mix = st.segmented_control("Visual mix", list(QUICK_MIXES), default="⚖️ Balanced", key="quick_mix",
+                                       label_visibility="collapsed") or "⚖️ Balanced"
+            draft = st.toggle("Draft quality (720p, about twice as fast)", False, key="quick_draft")
+        free_only, max_ai_video = QUICK_MIXES[mix]
+        low, high = (0.02, 0.06) if free_only else (0.05, 0.6)
+        running = jobs.active(b["id"], {"quick"})
+        with c2:
+            t.md(f'<div class="bps-muted">Expected cost</div><div style="font:700 1.6rem Fraunces,serif">'
+                 f'{money(low)} - {money(high)}</div><div class="bps-muted">depends on the AI shots it picks</div>')
+            if st.button("⚡ Make a video now", type="primary", width="stretch", disabled=bool(running)):
+                from promo import config as cfg
+                start_task("quick", b["id"], "Quick video", {
+                    "args": {"n": 3, "max_ai_video": max_ai_video, "free_only": free_only,
+                             "has_broll": bool(render._broll_clips(b)), "has_stock": bool(cfg.PEXELS_API_KEY)},
+                    "options": {"quality_check": True, "draft": draft}},
+                    note="Quick video started - it will appear in Videos in a few minutes")
+        task_panel(b["id"], {"quick"})
 
 
 # ---- 1 · Book -------------------------------------------------------------------------------
@@ -165,10 +198,9 @@ def book_page() -> None:
                 c1.image(str(bg))
             else:
                 c1.caption("Plain wood until you add a desk photo (made automatically on first render).")
-            if c2.button(f"✨ AI desk photo ({money(image_price())})", width="stretch"):
-                with st.spinner("Creating a desk photo..."):
-                    if run_safely(visuals.make_background, b):
-                        st.rerun()
+            if c2.button(f"✨ AI desk photo ({money(image_price())})", width="stretch",
+                         disabled=bool(jobs.active(b["id"], {"desk"}))):
+                start_task("desk", b["id"], "Desk photo")
             up = c2.file_uploader("…or upload a desk photo", ["png", "jpg", "jpeg"], key=f"bg_{b['id']}")
             if up and c2.button("Use photo"):
                 b["background"] = save_upload(up, bk.book_dir(b["id"]), "background")
@@ -195,9 +227,7 @@ def book_page() -> None:
         label = "Read it again" if b.get("digest") else "Read my manuscript"
         if c2.button(label, type="secondary" if b.get("digest") else "primary", width="stretch",
                      disabled=not (ms and ms.exists())):
-            with st.spinner("Reading the book..."):
-                if run_safely(bk.build_digest, b):
-                    st.rerun()
+            start_task("digest", b["id"], "AI read-through")
         d = b.get("digest")
         if d:
             c1, c2 = st.columns(2)
@@ -227,6 +257,16 @@ def book_page() -> None:
                     bk.save(b)
                     st.toast("Added to featured pages", icon="⭐")
 
+    task_panel(b["id"], {"digest", "desk"})
+    with st.expander("⚠️ Delete this book"):
+        st.caption("Deletes the book with its manuscript, characters, scripts and videos - here and in cloud storage. "
+                   "Make a backup first (💾 Backup & storage) if you might want it back.")
+        confirm = st.text_input(f"Type the title to confirm: {b['title']}", key=f"del_book_{b['id']}")
+        if st.button("Delete book permanently", disabled=confirm.strip() != b["title"].strip()):
+            run_safely(bk.delete_book, b["id"])
+            st.session_state.pop("book_id", None)
+            st.toast("Book deleted", icon="🗑")
+            st.rerun()
     next_step("characters", "add the characters your videos should show")
 
 
@@ -277,16 +317,12 @@ def characters_page() -> None:
                 a, d = st.columns([3, 1])
                 if a.button("✨ AI portrait" if not uri else "↻ New portrait", key=f"port_{i}", width="stretch",
                             help=f"About {money(image_price())}"):
-                    with st.spinner(f"Creating {c['name']}..."):
-                        img = run_safely(visuals.make_character_reference, b, c)
-                        if img:
-                            c["ref_image"] = str(img.relative_to(bk.book_dir(b["id"]))).replace("\\", "/")
-                            bk.save(b)
-                            st.rerun()
+                    start_task("portrait", b["id"], c["name"], {"name": c["name"]})
                 if d.button("🗑", key=f"delc_{i}", width="stretch", help="Remove"):
                     chars.pop(i)
                     bk.save(b)
                     st.rerun()
+    task_panel(b["id"], {"portrait"})
     next_step("pages", "pick the pages and lines your videos turn to")
 
 

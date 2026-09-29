@@ -94,7 +94,9 @@ def make_background(book: dict) -> Path:
     img = ai_image("Top-down photo of an empty wooden reading desk, warm lamp light, a coffee mug and a pen at the "
                    f"edges, the centre left empty for a book. Mood: {world[:200]}", bk.book_dir(book["id"]))
     book["background"] = img.name
-    bk.save(book)
+    fresh = bk.load(book["id"])  # keep edits made while the photo was being created
+    fresh["background"] = img.name
+    bk.save(fresh)
     return img
 
 

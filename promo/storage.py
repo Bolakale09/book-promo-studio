@@ -23,7 +23,7 @@ from pathlib import Path
 from . import config
 
 INDEX = config.DATA / ".sync_index.json"
-SKIP_DIRS = ("jobs/", "sfx/", "references/")            # temporary or re-creatable
+SKIP_DIRS = ("jobs/", "sfx/", "references/", "_backups/")  # temporary/re-creatable; backups are handled apart
 SKIP_NAMES = {"pages.json", "video_only.mp4", "segments.txt", ".sync_index.json", ".restored"}
 MARKER = config.DATA / ".restored"  # this server holds the restored library -> safe to upload
 SKIP_SUFFIXES = (".tmp", ".part")
@@ -425,3 +425,62 @@ def status() -> dict:
 def cloud_usage() -> dict:
     objs = _remote_objects()
     return {"files": len(objs), "mb": round(sum(o["size"] for o in objs.values()) / 1e6, 1)}
+
+
+# ---- deleting + cloud backups ----------------------------------------------------------------------------
+
+def delete_remote_folder(folder: Path) -> int:
+    """Delete everything under a data/ folder from R2 too (incl. videos that only live in the cloud)."""
+    if not enabled():
+        return 0
+    prefix = _key(rel(folder)).rstrip("/") + "/"
+    keys, token = [], None
+    while True:
+        kw = {"Bucket": _bucket(), "Prefix": prefix}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = client().list_objects_v2(**kw)
+        keys += [o["Key"] for o in resp.get("Contents", [])]
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    for i in range(0, len(keys), 1000):
+        client().delete_objects(Bucket=_bucket(), Delete={"Objects": [{"Key": k} for k in keys[i:i + 1000]]})
+    idx = _load_index()
+    r = rel(folder).rstrip("/") + "/"
+    for k in [k for k in idx if k.startswith(r)]:
+        idx.pop(k)
+    _save_index(idx)
+    return len(keys)
+
+
+def _backup_key(name: str = "") -> str:
+    return _key("_backups/" + name)
+
+
+def save_backup_to_cloud(book_id: str, include_videos: bool = True) -> str:
+    """Store a backup zip in R2 (nothing to download or upload by hand). Returns its name."""
+    data = backup_zip(book_id, include_videos)
+    name = f"{book_id}/{datetime.now():%Y-%m-%d_%H%M%S}{'' if include_videos else '_no-videos'}.zip"
+    client().put_object(Bucket=_bucket(), Key=_backup_key(name), Body=data, ContentType="application/zip")
+    return name
+
+
+def list_cloud_backups() -> list[dict]:
+    if not enabled():
+        return []
+    prefix = _backup_key()
+    resp = client().list_objects_v2(Bucket=_bucket(), Prefix=prefix)
+    out = [{"name": o["Key"][len(prefix):], "mb": round(o["Size"] / 1e6, 1), "at": o["LastModified"]}
+           for o in resp.get("Contents", []) if o["Key"].endswith(".zip")]
+    return sorted(out, key=lambda b: b["at"], reverse=True)
+
+
+def restore_cloud_backup(name: str) -> str:
+    buf = io.BytesIO()
+    client().download_fileobj(_bucket(), _backup_key(name), buf)
+    return restore_zip(buf.getvalue())
+
+
+def delete_cloud_backup(name: str) -> None:
+    client().delete_object(Bucket=_bucket(), Key=_backup_key(name))

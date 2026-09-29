@@ -12,6 +12,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import wave
 import zlib
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +29,17 @@ from .transcribe import align_words
 W, H, FPS = config.W, config.H, config.FPS
 S = 1.5                      # desk scenes are composed larger than the output so the camera can push in sharply
 CW, CH = int(W * S), int(H * S)
+K = 1.0                      # text/size scale relative to 1080p (0.667 for a 720p draft)
+PRESET, CRF = "faster", "19"
+
+
+def use_size(draft: bool) -> None:
+    """Draft = 720x1280 with a quicker encode (~2x faster, fine for checking); final = 1080x1920."""
+    global W, H, CW, CH, K, PRESET, CRF
+    W, H = (720, 1280) if draft else (config.W, config.H)
+    CW, CH = int(W * S), int(H * S)
+    K = W / 1080
+    PRESET, CRF = ("veryfast", "23") if draft else ("faster", "19")
 LEAD, TAIL = 0.15, 0.35      # silence before / after each block of narration
 SILENT_DEFAULT = 3.0
 LAST_SCENE_MIN = 2.8         # the breadcrumb needs time to be read
@@ -504,7 +516,7 @@ class Captions:
     """TikTok-style captions: 1-3 words at a time, the spoken word lit up in the genre accent colour."""
 
     def __init__(self, words: list[dict], font_name: str, accent: tuple, upper: bool):
-        self.font = bk.font(font_name, 84 if font_name == "Georgia" else 78)
+        self.font = bk.font(font_name, int((84 if font_name == "Georgia" else 78) * K))
         self.accent, self.upper = accent, upper
         self.chunks = self._chunk(words)
 
@@ -530,16 +542,16 @@ class Captions:
         toks = [w["word"].upper() if self.upper else w["word"] for w in words]
         f = self.font
         tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        lines = _wrap(tmp, toks, f, 960)
+        lines = _wrap(tmp, toks, f, 960 * K)
         asc, desc = f.getmetrics()
         lh = asc + desc
-        sw = 8
+        sw = max(3, int(8 * K))
         space = tmp.textlength(" ", font=f)
-        img = Image.new("RGBA", (W, lh * len(lines) + 40), (0, 0, 0, 0))
+        img = Image.new("RGBA", (W, lh * len(lines) + int(40 * K)), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         for li, idxs in enumerate(lines):
             total = sum(tmp.textlength(toks[i], font=f) for i in idxs) + space * (len(idxs) - 1)
-            x, y = (W - total) / 2, 20 + li * lh
+            x, y = (W - total) / 2, int(20 * K) + li * lh
             for i in idxs:
                 fill = self.accent if i == active else (255, 255, 255)
                 d.text((x, y), toks[i], font=f, fill=fill, stroke_width=sw, stroke_fill=(0, 0, 0))
@@ -797,7 +809,7 @@ def _segment(s: dict, idx: int, f0: int, f1: int, cap, out: Path, tick) -> None:
     with tempfile.TemporaryFile() as errlog:
         enc = subprocess.Popen(
             [ff.ffmpeg_exe(), "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-             "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", "faster", "-crf", "19",
+             "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-preset", PRESET, "-crf", CRF,
              "-pix_fmt", "yuv420p", "-threads", "2", str(out)],
             stdin=subprocess.PIPE, stderr=errlog)
         try:
@@ -868,9 +880,13 @@ def _look_through(book, scenes, segs, bounds, cap, desk, assets, warn, progress,
 
 def render(book: dict, variant: dict, voice_name: str | None = None, captions: bool = True,
            music: Path | None = None, music_volume: float = 0.25, page_sound: bool = True,
-           quality_check: bool = True, video_retries: int = 1,
-           progress=lambda msg, frac=None: None) -> Path:
+           quality_check: bool = True, video_retries: int = 1, draft: bool = False,
+           progress=lambda msg, frac=None: None, redo_of: str | None = None) -> Path:
     g = GENRES[book["genre"]]
+    use_size(draft)
+    options = {"voice_name": voice_name, "captions": captions, "music": str(music) if music else None,
+               "music_volume": music_volume, "page_sound": page_sound, "quality_check": quality_check,
+               "video_retries": video_retries, "draft": draft}
     scenes = [dict(s) for s in variant.get("scenes", []) if s]
     if not scenes:
         raise ValueError("This script has no scenes.")
@@ -910,11 +926,12 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
     for i, s in enumerate(scenes):
         ov = (s.get("overlay") or "").strip()
         if book["genre"] == "medical" and i == len(scenes) - 1 and "not medical advice" not in ov.lower():
-            s["footer"] = text_card("Educational only - not medical advice.", "Arial", 30, "shadow", 900)
+            s["footer"] = text_card("Educational only - not medical advice.", "Arial", int(30 * K), "shadow",
+                                    int(900 * K))
         if ov and not (captions and _same(ov, s.get("voiceover", ""))):
             hook = i == 0 and not poetic
-            s["ov_img"] = text_card(ov, "Arial Black" if hook else g["font"], 60 if hook else 56,
-                                    "box" if hook else "shadow")
+            s["ov_img"] = text_card(ov, "Arial Black" if hook else g["font"], int((60 if hook else 56) * K),
+                                    "box" if hook else "shadow", int(900 * K))
         desky = s.get("visual") in ("page", "flip", "cover")
         s["ov_y"] = H * (0.13 if desky else 0.17)
         s["cap_y"] = H * (0.77 if desky else 0.64)
@@ -931,15 +948,19 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
     n_frames = bounds[-1]
     done = [0]
     lock = threading.Lock()
+    t_draw = time.time()
 
     def tick():
         with lock:
             done[0] += 1
             if done[0] % 15 == 0:
-                progress(f"Drawing frames {done[0]}/{n_frames}", 0.3 + 0.62 * done[0] / n_frames)
+                left = (time.time() - t_draw) / done[0] * (n_frames - done[0])
+                eta = f"about {left / 60:.0f} min left" if left > 90 else f"about {max(5, round(left, -1)):.0f} s left"
+                progress(f"Drawing the video · {100 * done[0] // n_frames}% · {eta}", 0.3 + 0.62 * done[0] / n_frames)
 
     segs = [out_dir / f"seg_{i:02d}.mp4" for i in range(len(scenes))]
-    workers = int(os.getenv("RENDER_WORKERS", "0")) or max(1, min(2, (os.cpu_count() or 2) // 2))
+    # the free web server has little memory: one scene at a time there; two on a PC
+    workers = int(os.getenv("RENDER_WORKERS", "0")) or (1 if os.name != "nt" else max(1, min(2, (os.cpu_count() or 2) // 2)))
     with ThreadPoolExecutor(workers) as pool:
         jobs = [pool.submit(_segment, sc, i, bounds[i], bounds[i + 1], cap.for_scene(i) if cap else None, segs[i], tick)
                 for i, sc in enumerate(scenes)]
@@ -970,6 +991,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         "music": music.name if music else None, "cost": round(budget.spent_this_month() - spent_before, 4),
         "warnings": warnings, "file": final.name,
         "quality": {"shots": qa_reports, "final": final_check} if quality_check else None,
+        "options": options, "draft": draft, "redo_of": redo_of,
     }
     (out_dir / "render.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
     progress("Done!", 1.0)
@@ -991,3 +1013,35 @@ def update_render(render_dir: str, **fields) -> None:
     m = json.loads(p.read_text(encoding="utf-8"))
     m.update(fields)
     p.write_text(json.dumps(m, indent=1), encoding="utf-8")
+
+
+def redo_scene(book: dict, render_dir: str, scene: int, prompt: str = "", progress=lambda m, f=None: None) -> Path:
+    """Make a new version of a video with one scene re-made. Everything else (voice, other AI shots) is reused
+    from the cache, so only the changed scene costs money."""
+    meta = json.loads((Path(render_dir) / "render.json").read_text(encoding="utf-8"))
+    variant = json.loads(json.dumps(meta["variant"]))
+    s = variant["scenes"][scene]
+    prompt = prompt.strip()
+    if s.get("visual") == "stock":
+        if prompt and prompt != s.get("stock_query"):
+            s["stock_query"] = prompt
+        else:
+            s["_stock_skip"] = s.get("_stock_skip", 0) + 1       # same search: take the next clip
+    elif prompt:
+        s["prompt"] = prompt
+    s["_take"] = s.get("_take", 0) + 20                          # always a fresh AI shot
+    variant["name"] = (meta["variant"].get("name") or "video").split(" · redo")[0] + f" · redo {scene + 1}"
+    opts = dict(meta.get("options") or {"voice_name": meta.get("voice"), "captions": meta.get("captions", True)})
+    if opts.get("music"):
+        opts["music"] = Path(opts["music"]) if Path(opts["music"]).exists() else None
+    return render(book, variant, progress=progress, redo_of=Path(render_dir).name, **opts)
+
+
+def delete_render(render_dir: str) -> None:
+    """Remove a video (and its cloud copy)."""
+    import shutil
+    from . import storage
+    d = Path(render_dir)
+    if d.exists():
+        shutil.rmtree(d)
+    storage.delete_remote_folder(d)

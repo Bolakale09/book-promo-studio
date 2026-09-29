@@ -119,7 +119,8 @@ VISUAL TYPES YOU MAY USE:
   no text or logos in the image.
 {('EXTRA NOTES FROM THE AUTHOR: ' + notes) if notes else ''}
 
-Write {n} DIFFERENT variants, each using a different angle and hook type. Return JSON:
+Write {n} DIFFERENT variants, each using a different angle and hook type. List them from strongest to
+weakest (the first one will be rendered automatically). Return JSON:
 {{"variants": [{{
   "name": "short label",
   "angle": "which angle",

@@ -17,7 +17,8 @@ BLUEPRINTS_DIR = DATA / "blueprints"
 PROJECTS_DIR = DATA / "projects"
 BROLL_DIR = DATA / "broll"
 MUSIC_DIR = DATA / "music"
-BUDGET_FILE = DATA / "budget.json"
+BUDGET_FILE = DATA / "budget.json"        # old format, still read
+BUDGET_LOG = DATA / "budget.jsonl"        # one line per paid call, only ever appended
 
 for _d in (BOOKS_DIR, REFS_DIR, BLUEPRINTS_DIR, PROJECTS_DIR, BROLL_DIR, MUSIC_DIR):
     _d.mkdir(parents=True, exist_ok=True)

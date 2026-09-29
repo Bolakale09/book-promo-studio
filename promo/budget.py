@@ -59,9 +59,19 @@ def _month() -> str:
 
 
 def _load() -> list:
-    if config.BUDGET_FILE.exists():
-        return json.loads(config.BUDGET_FILE.read_text(encoding="utf-8"))
-    return []
+    entries = []
+    if config.BUDGET_FILE.exists():  # log written by older versions
+        try:
+            entries = json.loads(config.BUDGET_FILE.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            entries = []
+    if config.BUDGET_LOG.exists():
+        for line in config.BUDGET_LOG.read_text(encoding="utf-8").splitlines():
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # a half-written last line is skipped, never fatal
+    return entries
 
 
 def spent_this_month() -> float:
@@ -83,17 +93,10 @@ def guard(estimated_cost: float, what: str) -> None:
 
 
 def record(service: str, model: str, cost: float, note: str = "") -> None:
-    with _lock:
-        entries = _load()
-        entries.append({
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "month": _month(),
-            "service": service,
-            "model": model,
-            "cost": round(cost, 5),
-            "note": note[:120],
-        })
-        config.BUDGET_FILE.write_text(json.dumps(entries, indent=1), encoding="utf-8")
+    line = json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "month": _month(), "service": service,
+                       "model": model, "cost": round(cost, 5), "note": note[:120]}) + "\n"
+    with _lock, open(config.BUDGET_LOG, "a", encoding="utf-8") as f:  # append = safe across processes
+        f.write(line)
 
 
 def recent(n: int = 30) -> list:

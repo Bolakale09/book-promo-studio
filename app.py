@@ -10,6 +10,7 @@ import streamlit as st
 from promo import storage
 from ui import common, theme
 from ui.create_pages import render_page, scripts_page, videos_page
+from ui.manage_pages import backup_page
 from ui.setup_pages import book_page, characters_page, formats_page, home, pages_page
 
 st.set_page_config(page_title="Book Promo Studio", page_icon="📚", layout="wide")
@@ -76,6 +77,7 @@ common.PAGES.update({
     "scripts": st.Page(scripts_page, title="5 Scripts", icon="✍️", url_path="scripts"),
     "render": st.Page(render_page, title="6 Render", icon="🎬", url_path="render"),
     "videos": st.Page(videos_page, title="7 Videos", icon="📂", url_path="videos"),
+    "backup": st.Page(backup_page, title="Backup & storage", icon="💾", url_path="backup", visibility="hidden"),
 })
 nav = st.navigation(list(common.PAGES.values()), position="top")
 common.sidebar()

@@ -1,18 +1,81 @@
 """The making steps: scripts, render, videos."""
+import json
+import textwrap
 import time
 from pathlib import Path
 
 import streamlit as st
+from PIL import Image, ImageDraw
 
 from promo import analyze, book as bk, budget, config, jobs, render, script, voice
 from promo.genres import GENRES, default_blueprint
 
 from . import theme as t
 from .common import (MUSIC_EXT, frame_to_scenes, go, image_price, money, need_book, next_step, run_safely,
-                     scenes_frame, video_src)
+                     scenes_frame, start_task, task_panel, video_src)
 
 VISUALS = list(script.VISUAL_TYPES)
 MIXES = {"💸 Free only": (True, 0), "⚖️ Balanced": (False, 1), "🎬 Cinematic": (False, 2)}
+
+
+# ---- storyboard: a free preview of every scene before anything is paid for ------------------------
+
+@st.cache_data(show_spinner=False, max_entries=40)
+def _storyboard(book_id: str, stamp: tuple, scenes_json: str) -> list:
+    b = bk.load(book_id)
+    scenes = json.loads(scenes_json)
+    tw, th = 216, 384
+    desk = bk.background(b).resize((tw, th))
+    small = bk.font("sans", 13)
+    tiny = bk.font("bold", 12)
+    out = []
+    for i, sc in enumerate(scenes):
+        vis = sc.get("visual", "cover")
+        img = desk.copy()
+        d = ImageDraw.Draw(img)
+        if vis in ("page", "flip") and bk.path(b, "manuscript"):
+            page = bk.preview_page(b, int(sc.get("page") or 1), sc.get("highlight") or "")
+            page.thumbnail((int(tw * 0.86), int(th * 0.8)))
+            img.paste(page, ((tw - page.width) // 2, (th - page.height) // 2 + 10))
+        elif vis == "cover":  # the same 3D book the video shows (a title cover if none was uploaded)
+            cov = bk.book_object(b, width=int(tw * 0.6))
+            cov.thumbnail((int(tw * 0.62), int(th * 0.6)))
+            img.paste(cov, ((tw - cov.width) // 2, (th - cov.height) // 2 + 10), cov)
+        else:  # AI photo / AI video / stock / own clip: describe what will be made
+            d.rounded_rectangle((10, 60, tw - 10, th - 50), radius=10, fill=(24, 26, 36))
+            d.ellipse((tw / 2 - 18, 78, tw / 2 + 18, 114), outline=(240, 180, 41), width=3)  # drawing fonts have no emoji
+            d.polygon([(tw / 2 - 6, 86), (tw / 2 - 6, 106), (tw / 2 + 10, 96)], fill=(240, 180, 41))
+            d.text((tw / 2, 128), t.VISUAL_LABEL.get(vis, vis).upper(), font=tiny, fill=(240, 180, 41), anchor="mm")
+            desc = sc.get("prompt") or sc.get("stock_query") or ""
+            if sc.get("character"):
+                desc = f"{sc['character']}: {desc}"
+            y = 145
+            for line in textwrap.wrap(desc, 26)[:11]:
+                d.text((20, y), line, font=small, fill=(215, 210, 200))
+                y += 16
+        ov = (sc.get("overlay") or "").strip()
+        if ov:
+            lines = textwrap.wrap(ov, 24)[:3]
+            h = 8 + 16 * len(lines)
+            d.rounded_rectangle((12, 14, tw - 12, 14 + h), radius=6, fill=(255, 255, 255))
+            for k, line in enumerate(lines):
+                d.text((tw / 2, 22 + 16 * k), line, font=tiny, fill=(20, 20, 20), anchor="mt")
+        d.rectangle((0, th - 30, tw, th), fill=(0, 0, 0))
+        d.text((8, th - 15), f"{i + 1} · {sc.get('beat', '')}"[:28], font=tiny, fill=(255, 255, 255), anchor="lm")
+        d.text((tw - 8, th - 15), f"{t.scene_seconds(sc):.1f}s", font=tiny, fill=(240, 180, 41), anchor="rm")
+        out.append(img)
+    return out
+
+
+def storyboard(b: dict, scenes: list[dict]) -> None:
+    ms = bk.path(b, "manuscript")
+    cov = bk.path(b, "cover")
+    stamp = tuple(p.stat().st_mtime if p and p.exists() else 0 for p in (ms, cov, bk.path(b, "background")))
+    imgs = run_safely(_storyboard, b["id"], stamp, json.dumps(scenes, sort_keys=True))
+    if imgs:
+        st.image(imgs, width=132)
+        st.caption("Free preview - pages and cover are shown as they'll appear; AI and stock shots show what will "
+                   "be made.")
 
 
 # ---- 5 · Scripts ----------------------------------------------------------------------------
@@ -56,16 +119,15 @@ def scripts_page() -> None:
         ready = b.get("digest") or b.get("blurb")
         if not ready:
             st.info("Add a blurb or run the AI read-through in Step 1 first.")
-        if st.button(f"✨ Write {n} scripts", type="primary", disabled=not ready):
-            with st.spinner("Writing scripts..."):
-                variants = run_safely(script.generate, b, blueprint, n=n, max_ai_video=max_ai_video, notes=notes,
-                                      has_broll=bool(render._broll_clips(b)), has_stock=bool(config.PEXELS_API_KEY),
-                                      focus_characters=focus_chars, focus_pages=[feats[i] for i in focus_pages],
-                                      free_only=free_only)
-                if variants:
-                    script.add_scripts(b["id"], variants, blueprint.get("source", "builtin"))
-                    st.toast(f"{len(variants)} new scripts", icon="✍️")
-                    st.rerun()
+        writing = bool(jobs.active(b["id"], {"scripts"}))
+        if st.button(f"✨ Write {n} scripts", type="primary", disabled=not ready or writing):
+            start_task("scripts", b["id"], f"{n} scripts", {
+                "blueprint": blueprint, "source": blueprint.get("source", "builtin"),
+                "args": {"n": int(n), "max_ai_video": max_ai_video, "notes": notes,
+                         "has_broll": bool(render._broll_clips(b)), "has_stock": bool(config.PEXELS_API_KEY),
+                         "focus_characters": focus_chars, "focus_pages": [feats[i] for i in focus_pages],
+                         "free_only": free_only}})
+        task_panel(b["id"], {"scripts", "variations"})
 
     scripts = script.load_scripts(b["id"])
     st.write("")
@@ -105,6 +167,8 @@ def scripts_page() -> None:
                         script.save_scripts(b["id"], scripts)
                         st.rerun()
             t.md(t.timeline(scenes))
+            if st.toggle("🖼 Storyboard preview (free)", key=f"sb_{v.get('id', i)}"):
+                storyboard(b, scenes)
             with st.expander("✏️ Edit scenes, caption & hashtags"):
                 names = [c["name"] for c in b.get("characters", [])]
                 df = st.data_editor(
@@ -133,16 +197,13 @@ def scripts_page() -> None:
 
 # ---- 6 · Render -----------------------------------------------------------------------------
 
-@st.fragment(run_every=2)
-def render_status(book_id: str) -> None:
-    for s in jobs.recent(book_id, 3):
-        if s["state"] in ("queued", "running"):
-            with st.container(border=True):
-                st.markdown(f"**🎬 Rendering '{t.esc(s.get('name'))}'**")
-                st.progress(float(s.get("frac") or 0), text=s.get("msg"))
-                st.caption("You can keep working - the render runs in the background.")
-        elif s["state"] == "error" and time.time() - s.get("updated", 0) < 3600:
-            st.error(f"'{s.get('name')}' failed: {s.get('error')}")
+def queue_panel() -> None:
+    q = jobs.queue()
+    if len(q) > 1:
+        with st.expander(f"🎬 Render queue ({len(q)})", expanded=False):
+            for k, s in enumerate(q, 1):
+                state = "rendering now" if s["state"] == "running" else "waiting"
+                st.markdown(f"{k}. **{t.esc(s.get('name'))}** - {state} · _{t.esc(s.get('msg', ''))}_")
 
 
 def render_page() -> None:
@@ -150,7 +211,8 @@ def render_page() -> None:
     g = GENRES[b["genre"]]
     t.header("Step 6 · Render", "Make the video",
              "Narration, word-by-word captions, page turns, AI shots checked for flaws - assembled into a 9:16 MP4.")
-    render_status(b["id"])
+    task_panel(b["id"], jobs.HEAVY)
+    queue_panel()
     scripts = script.load_scripts(b["id"])
     if not scripts:
         t.empty("✍️", "Write a script first.")
@@ -168,6 +230,7 @@ def render_page() -> None:
             v = scripts[sel]
             st.session_state["render_pick"] = v.get("id")
             t.md(t.timeline(v.get("scenes", [])))
+            storyboard(b, v.get("scenes", []))
             for k, s in enumerate(v.get("scenes", []), 1):
                 vis = s.get("visual", "cover")
                 extra = f" · p.{s.get('page')}" if vis in ("page", "flip") else (
@@ -211,6 +274,9 @@ def render_page() -> None:
             video_retries = st.segmented_control("Re-make a flawed AI video up to", [0, 1, 2], default=1,
                                                  format_func=lambda n: f"{n}×", disabled=not quality)
             video_retries = 1 if video_retries is None else video_retries
+            draft = st.toggle("Draft quality (720p, about twice as fast)", False,
+                              help="Great for checking a script. Render the final in full quality once you like it - "
+                                   "AI shots and voice are reused, so the final costs nothing extra.")
 
         est = render.estimate(b, v, quality)
         left_budget = budget.remaining()
@@ -223,18 +289,28 @@ def render_page() -> None:
                  + "".join(t.chip(f"{k} {money(x)}") for k, x in parts if x)
                  + f'<div class="bps-muted" style="margin-top:.4rem">Budget left: {money(left_budget)} · shots '
                    f'already made are reused free</div>')
-            busy = any(s["state"] in ("queued", "running") for s in jobs.recent(b["id"], 3))
+            busy = bool(jobs.queue())
             over = est["total"] > left_budget
-            if st.button("🎬 Render video", type="primary", width="stretch", disabled=busy or over):
-                jobs.start(b["id"], v, {"voice_name": vname, "captions": captions,
-                                        "music": str(music) if music else None, "music_volume": vol,
-                                        "page_sound": page_sound, "quality_check": quality,
-                                        "video_retries": video_retries})
-                st.toast("Rendering started - a few minutes", icon="🎬")
+            opts = {"voice_name": vname, "captions": captions, "music": str(music) if music else None,
+                    "music_volume": vol, "page_sound": page_sound, "quality_check": quality,
+                    "video_retries": video_retries, "draft": draft}
+            label = ("➕ Add to render queue" if busy else "🎬 Render video") + (" (draft)" if draft else "")
+            if st.button(label, type="primary", width="stretch", disabled=over):
+                jobs.start_render(b["id"], v, opts)
+                st.toast("Added to the queue" if busy else "Rendering started - a few minutes", icon="🎬")
                 time.sleep(0.8)
                 st.rerun()
             if busy:
-                st.caption("A render is already running for this book.")
+                st.caption("Renders run one at a time; this one will start when the others finish.")
+            with st.popover("🎬 Render several scripts", width="stretch"):
+                many = st.multiselect("Scripts to queue (same sound & quality settings)", range(len(scripts)),
+                                      format_func=lambda i: scripts[i].get("name", f"Script {i + 1}"))
+                if st.button(f"Queue {len(many)} render(s)", type="primary", disabled=not many or over):
+                    for i in many:
+                        jobs.start_render(b["id"], scripts[i], opts)
+                    st.toast(f"{len(many)} renders queued", icon="🎬")
+                    time.sleep(0.8)
+                    st.rerun()
             if over:
                 st.warning("Over your monthly budget - choose the 💸 Free only mix when writing scripts.")
     next_step("videos", "download, post, and log how each video does")
@@ -276,6 +352,7 @@ def videos_page() -> None:
     b = need_book()
     t.header("Step 7 · Videos", "Post, measure, clone the winner",
              "Post several, log their views, then make variations of the best one that change ONE thing.")
+    task_panel(b["id"], jobs.HEAVY | {"variations"})
     renders = render.list_renders(b["id"])
     if not renders:
         t.empty("🎬", "Rendered videos appear here.")
@@ -301,7 +378,8 @@ def videos_page() -> None:
                     st.caption("🎬 Video file not found on this server or in cloud storage.")
                 t.md(f'<div class="bps-card-title">{"🏆 " if r.get("winner") else ""}{t.esc(v.get("name"))}</div>')
                 t.chips([(f"{r['seconds']:.0f}s", ""), (money(r.get("cost", 0)), ""), _quality_chip(r.get("quality")),
-                         (f"👁 {r.get('views', 0):,}", "gold" if r.get("views") else "")])
+                         (f"👁 {r.get('views', 0):,}", "gold" if r.get("views") else "")]
+                        + ([("Draft 720p", "blue")] if r.get("draft") else []))
                 if r.get("warnings"):
                     st.caption(f"⚠ {len(r['warnings'])} note(s) - see Details")
                 if Path(r["path"]).exists():
@@ -319,18 +397,40 @@ def videos_page() -> None:
                     if st.button("Save", key=f"savestats_{k}", type="primary", width="stretch"):
                         render.update_render(k, views=views, likes=likes, winner=winner)
                         st.rerun()
+                c1, c2 = st.columns(2)
+                with c1.popover("🔁 Redo a scene", width="stretch"):
+                    scenes = v.get("scenes", [])
+                    redo_ok = [i for i, sc in enumerate(scenes) if sc.get("visual") in
+                               ("ai_image", "character", "ai_video", "stock")]
+                    if not redo_ok:
+                        st.caption("This video has no AI or stock shots to redo - edit the script instead.")
+                    else:
+                        si = st.selectbox("Scene", redo_ok, key=f"rs_{k}", format_func=lambda i: (
+                            f"{i + 1} · {scenes[i].get('beat', '')} · {t.VISUAL_LABEL.get(scenes[i].get('visual'), '')}"))
+                        cur = scenes[si].get("stock_query") if scenes[si].get("visual") == "stock" else scenes[si].get("prompt")
+                        new_prompt = st.text_area("What should it show? (leave as is for a fresh take)", cur or "",
+                                                  key=f"rp_{k}_{si}", height=110)
+                        st.caption("Makes a new version of the video; only this shot is re-made (voice and other "
+                                   "shots are reused), so it costs about one AI shot.")
+                        if st.button("Make new version", type="primary", key=f"redo_{k}", width="stretch"):
+                            start_task("redo", b["id"], f"{v.get('name')} · scene {si + 1}",
+                                       {"render_dir": k, "scene": si, "prompt": new_prompt})
+                with c2.popover("🗑 Delete", width="stretch"):
+                    st.caption("Deletes this video here and in cloud storage.")
+                    if st.button("Delete video", key=f"delv_{k}", type="primary", width="stretch"):
+                        run_safely(render.delete_render, k)
+                        st.toast("Video deleted", icon="🗑")
+                        st.rerun()
                 with st.expander("Details & quality report"):
                     for w in r.get("warnings", []):
                         st.caption(f"⚠ {w}")
                     quality_report(r.get("quality"))
-                    st.caption(f"Made {r['created']} · voice {r.get('voice')}")
+                    st.caption(f"Made {r['created']} · voice {r.get('voice')}"
+                               + (f" · new version of {r['redo_of']}" if r.get("redo_of") else ""))
                 if r.get("winner"):
                     change = st.selectbox("Clone, changing only…", [
                         "the hook (first line + first overlay)", "the footage / visuals",
                         "the pacing (faster cuts)", "the angle wording, same structure"], key=f"chg_{k}")
                     if st.button("🧬 Make 3 variations", key=f"clone_{k}", width="stretch"):
-                        with st.spinner("Writing variations..."):
-                            out = run_safely(script.variations, b, v, change)
-                            if out:
-                                script.add_scripts(b["id"], out, f"variation of {v.get('name')}")
-                                st.toast(f"{len(out)} variations added to Scripts", icon="🧬")
+                        start_task("variations", b["id"], f"Variations of {v.get('name')}",
+                                   {"winner": v, "change": change})

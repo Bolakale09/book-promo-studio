@@ -162,7 +162,7 @@ def sidebar() -> None:
         if st.button("⚙️ Settings & API keys", width="stretch"):
             settings_dialog()
         if st.button("💾 Backup & storage", width="stretch"):
-            storage_dialog()
+            go("backup")
         if storage.enabled():
             err = storage.state.get("last_error")
             when = (storage.state.get("last_sync") or (storage.state.get("restore") or {}).get("at") or "")[11:16]
@@ -180,21 +180,73 @@ def sidebar() -> None:
             st.caption("💡 Add a free Pexels key in Settings for realistic stock footage at $0.")
 
 
-@st.fragment(run_every=3)
 def side_jobs() -> None:
+    """Progress of background tasks. Only refreshes itself while something is running (a constantly
+    refreshing sidebar can interrupt file uploads)."""
     bid = st.session_state.get("book_id")
-    if not bid:
-        return
-    for s in jobs.recent(bid, 2):
-        if s["state"] in ("queued", "running"):
-            st.progress(float(s.get("frac") or 0), text=f"🎬 {s.get('name')} · {int(100 * (s.get('frac') or 0))}%")
-        elif s["state"] == "done":
-            seen = st.session_state.setdefault("seen_jobs", set())
-            if s["id"] not in seen:
-                seen.add(s["id"])
-                if time.time() - s.get("updated", 0) < 600:
-                    st.toast(f"✅ '{s.get('name')}' is ready in Videos", icon="🎬")
-                    st.rerun(scope="app")
+    if bid and jobs.active(bid):
+        _side_jobs_live(bid)
+    elif bid:
+        _announce_finished(bid)
+
+
+@st.fragment(run_every=3)
+def _side_jobs_live(bid: str) -> None:
+    for s in jobs.active(bid):
+        label = jobs.LABELS.get(s.get("kind"), "Working")
+        st.progress(float(s.get("frac") or 0), text=f"⏳ {label}: {s.get('name')} · {s.get('msg', '')[:40]}")
+    if _announce_finished(bid) or not jobs.active(bid):
+        st.rerun(scope="app")
+
+
+def _announce_finished(bid: str) -> bool:
+    """Toast each task that finished since we last looked. Returns True if anything new finished."""
+    seen = st.session_state.setdefault("seen_jobs", set())
+    new = False
+    for s in jobs.recent(bid, 8):
+        if s["state"] in ("done", "error") and s["id"] not in seen:
+            seen.add(s["id"])
+            if time.time() - s.get("updated", 0) > 900:
+                continue  # old news (e.g. right after the app restarted)
+            new = True
+            if s["state"] == "done":
+                where = {"render": "Videos", "quick": "Videos", "redo": "Videos", "scripts": "Scripts",
+                         "variations": "Scripts"}.get(s.get("kind"), "")
+                st.toast(f"✅ {s.get('result') or s.get('name')} - ready" + (f" in {where}" if where else ""), icon="✅")
+            else:
+                st.toast(f"❌ {jobs.LABELS.get(s.get('kind'), 'Task')} failed: {s.get('error', '')[:120]}", icon="❌")
+    return new
+
+
+def start_task(kind: str, book_id: str, name: str, payload: dict | None = None, note: str = "") -> None:
+    jobs.start(kind, book_id, name, payload)
+    st.session_state.setdefault("seen_jobs", set())
+    st.toast(note or f"{jobs.LABELS.get(kind, 'Working')} - you can keep working or leave this page", icon="⏳")
+    time.sleep(0.6)
+    st.rerun()
+
+
+def task_panel(book_id: str, kinds: set, title: str = "") -> bool:
+    """Show running / failed tasks of these kinds on a page. Returns True while one is running."""
+    running = jobs.active(book_id, kinds)
+    if running:
+        _task_panel_live(book_id, tuple(sorted(kinds)))
+    latest = next(iter(jobs.recent(book_id, 1, kinds)), None)  # only if the most recent attempt failed
+    if latest and latest["state"] == "error" and time.time() - latest.get("updated", 0) < 1800:
+        st.error(f"{jobs.LABELS.get(latest.get('kind'), 'Task')} failed: {latest.get('error', '')[:300]}")
+    return bool(running)
+
+
+@st.fragment(run_every=2)
+def _task_panel_live(book_id: str, kinds: tuple) -> None:
+    running = jobs.active(book_id, set(kinds))
+    if not running:
+        st.rerun(scope="app")
+    for s in running:
+        with st.container(border=True):
+            st.markdown(f"**⏳ {jobs.LABELS.get(s.get('kind'), 'Working')}: {t.esc(s.get('name'))}**")
+            st.progress(float(s.get("frac") or 0), text=s.get("msg"))
+            st.caption("Runs in the background - you can keep working or leave this page.")
 
 
 # ---- dialogs -----------------------------------------------------------------------------------
@@ -248,82 +300,6 @@ def settings_dialog() -> None:
         vals.update({k: v for k, v in keys.items() if v.strip()})
         _save_env({k: v.strip() for k, v in vals.items()})
         st.rerun()
-
-
-@st.dialog("Backup & storage", width="large")
-def storage_dialog() -> None:
-    s = storage.status()
-    if s["enabled"]:
-        st.success(f"☁️ Cloud storage is on - everything is saved to your Cloudflare R2 bucket **{s['bucket']}** "
-                   "and comes back automatically when the app wakes up.")
-        r = s.get("restore") or {}
-        t.stats([("On this server", f"{s['local_files']} files", f"{s['local_mb']} MB"),
-                 ("Last saved", (s.get("last_sync") or r.get("at") or "-")[11:19] or "-",
-                  f"{s['uploaded']} uploaded · {s['deleted']} removed this session"),
-                 ("Restored at start", str(r.get("downloaded", 0)), f"{r.get('videos_in_cloud', 0)} videos streamed")])
-        if s.get("last_error"):
-            st.error(f"Last sync failed: {s['last_error']}")
-        tips = storage.diagnose()
-        if tips:
-            st.warning("Your R2 settings look off:  \n" + "  \n".join(f"• {x}" for x in tips))
-        if st.button("🔌 Test connection", width="stretch"):
-            with st.spinner("Connecting to R2..."):
-                ok, msg = storage.test_connection()
-            (st.success if ok else st.error)(msg + ("  \nNow close this and click **Try again** at the top of the "
-                                                     "page to restore your library." if ok and
-                                                     not storage.state.get("restored") else ""))
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 Save to cloud now", type="primary", width="stretch"):
-            with st.spinner("Uploading..."):
-                res = run_safely(storage.sync_up)
-            if res is not None:
-                st.success(f"Up to date: {res['uploaded']} uploaded, {res['deleted']} removed.")
-        if c2.button("📊 Check cloud usage", width="stretch"):
-            u = run_safely(storage.cloud_usage)
-            if u:
-                st.info(f"{u['files']} files · {u['mb']} MB used of the 10 GB free tier "
-                        f"({u['mb'] / 100:.1f}%)")
-    else:
-        st.warning("☁️ Cloud storage is off. " + ("On the web version your books, scripts and videos are deleted "
-                                                  "whenever the app restarts." if WEB else
-                                                  "Your data is saved on this PC only."))
-        st.markdown("**Turn it on (Cloudflare R2, free up to 10 GB):**\n"
-                    "1. Cloudflare dashboard → **R2** → **Create bucket** (e.g. `book-promo-studio`).\n"
-                    "2. R2 → **Manage API tokens** → **Create API token** → permission **Object Read & Write**, "
-                    "limited to that bucket.\n"
-                    "3. Add these to the app's **Secrets** (web) or `.env` (PC), then restart the app:")
-        st.code('R2_ACCOUNT_ID = "your account id"\nR2_ACCESS_KEY_ID = "..."\nR2_SECRET_ACCESS_KEY = "..."\n'
-                'R2_BUCKET = "book-promo-studio"', language="toml")
-
-    st.divider()
-    b = current_book()
-    st.markdown("**📦 Backup a book**" + (f" - _{t.esc(b['title'])}_" if b else ""))
-    st.caption("One .zip with the book, manuscript, cover, characters, scripts, AI shots and (optionally) videos. "
-               "Keep it on your PC as an extra safety net - it works even without cloud storage.")
-    if b:
-        c1, c2 = st.columns([2, 3], vertical_alignment="center")
-        include = c1.toggle("Include videos", True)
-        if c2.button("Prepare backup", width="stretch"):
-            with st.spinner("Packing..."):
-                data = run_safely(storage.backup_zip, b["id"], include)
-            if data:
-                st.session_state["_backup"] = (b["id"], data)
-        ready = st.session_state.get("_backup")
-        if ready and ready[0] == b["id"]:
-            st.download_button(f"⬇ Download backup ({len(ready[1]) / 1e6:.1f} MB)", ready[1], type="primary",
-                               file_name=f"{b['id']}-backup-{time.strftime('%Y-%m-%d')}.zip",
-                               mime="application/zip", width="stretch")
-
-    st.markdown("**♻️ Restore a backup**")
-    up = st.file_uploader("Backup .zip made by this app", ["zip"], key="restore_zip")
-    if up and st.button("Restore this backup", width="stretch"):
-        with st.spinner("Restoring..."):
-            bid = run_safely(storage.restore_zip, up.getvalue())
-        if bid:
-            st.session_state["_goto_book"] = bid
-            st.session_state.pop("_backup", None)
-            storage.sync_soon()
-            st.rerun()
 
 
 @st.dialog("Spending", width="large")

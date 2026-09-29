@@ -13,14 +13,16 @@ The steps are in the top bar. The **Studio** page shows a checklist of what's do
 
 | Page | What you do |
 |---|---|
-| 🏠 Studio | Dashboard: your book, progress checklist, latest videos, spend. |
+| 🏠 Studio | Dashboard: your book, progress checklist, latest videos, spend. **⚡ Quick video** reads the book, writes 3 scripts and renders the strongest in one click. |
 | 1 Book | Title, **genre** (fiction, self-help, poetry, gift, medical, engineering, children's), cover, manuscript (PDF/DOCX/TXT), desk photo, your own clips. Click **Read my manuscript**, then tick the best lines to feature. |
 | 2 Characters | Add the **characters** to show, with a photo or an AI portrait so the face stays the same. |
 | 3 Pages | Browse the manuscript page by page and feature **pages and lines**. The video turns the pages, highlights the line and zooms in. |
 | 4 Format | Optional: paste a viral book video link. The app copies its structure, never its words. |
-| 5 Scripts | Choose the format, visual mix (Free only / Balanced / Cinematic), characters and pages. The AI writes several scripts, each shown as a colour-coded scene timeline, and you can edit every scene. |
-| 6 Render | Pick the voice, music, captions and AI quality check, see the cost, then click **Render**. This takes about 3-5 minutes on this PC and runs in the background. |
-| 7 Videos | Gallery: download, copy the caption and hashtags, log views, mark a **winner** and clone it with one thing changed. |
+| 5 Scripts | Choose the format, visual mix (Free only / Balanced / Cinematic), characters and pages. The AI writes several scripts, each shown as a colour-coded scene timeline with a free **storyboard preview**, and you can edit every scene. |
+| 6 Render | Pick the voice, music, captions and AI quality check, see the cost and storyboard, then click **Render**. Use **Draft (720p)** to check a script about twice as fast. Renders wait in a **queue** and run one at a time, and **Render several scripts** queues many at once. |
+| 7 Videos | Gallery: download, copy the caption and hashtags, log views, **redo one scene** (only that shot is re-made), delete, mark a **winner** and clone it with one thing changed. |
+
+Anything that takes a while (writing scripts, reading the manuscript, portraits, renders) runs **in the background**. You can switch pages or close the tab, and progress shows in the sidebar.
 
 ## Scene types
 - `page`: the previous page turns, then the quote is highlighted while the camera pushes in. **Free.**
@@ -65,7 +67,10 @@ To set it up:
 
 If the web app and the PC use the same bucket, they share one library.
 
-**💾 Backup & storage** in the sidebar shows the sync status. From there you can also download any book (with its videos) as a .zip and restore it later, which works even without R2.
+**💾 Backup & storage** (sidebar) opens a page with the sync status and backups:
+- **Save backup to cloud**, then restore it from a list later, with no file upload needed.
+- **Make a .zip to download**, which works even without R2, and restore it from a file with step-by-step progress.
+- Delete a video from its card in Videos, or a whole book at the bottom of the Book page. Cloud copies are removed too.
 
 Things to know about the web version:
 - Without R2 (above), files on the free server are wiped when the app restarts. That includes books, videos and the spending log.
