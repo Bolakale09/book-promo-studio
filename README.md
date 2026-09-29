@@ -17,6 +17,7 @@ The steps are in the top bar. The **Studio** page shows a checklist of what's do
 | 1 Book | Title, **genre** (fiction, self-help, poetry, gift, medical, engineering, children's), cover, manuscript (PDF/DOCX/TXT), desk photo, your own clips. Click **Read my manuscript**, then tick the best lines to feature. |
 | 2 Characters | Add the **characters** to show, with a photo or an AI portrait so the face stays the same. |
 | 3 Pages | Browse the manuscript page by page and feature **pages and lines**. The video turns the pages, highlights the line and zooms in. |
+| 🔥 Viral finder | Type your book title, a genre or a trope. The app finds popular book videos (with view counts where the source gives them); **🔁 Copy this style** studies one and saves it as a format for your scripts. Also has an **idea board** (hooks, angles, video ideas, hashtags, comparable books, captions). |
 | 4 Format | Optional: paste a viral book video link. The app copies its structure, never its words. |
 | 5 Scripts | Choose the format, visual mix (Free only / Balanced / Cinematic), characters and pages. The AI writes several scripts, each shown as a colour-coded scene timeline with a free **storyboard preview**, and you can edit every scene. |
 | 6 Render | Pick the voice, music, captions and AI quality check, see the cost and storyboard, then click **Render**. Use **Draft (720p)** to check a script about twice as fast. Renders wait in a **queue** and run one at a time, and **Render several scripts** queues many at once. |
@@ -47,6 +48,16 @@ Every paid call is checked against `MONTHLY_BUDGET_USD` first. If the next call 
 - A video using only free visuals costs about $0.01 (just the voice).
 
 You can see all spending in the sidebar under **Spending log**.
+
+## Viral finder - what it can and can't do
+TikTok and Instagram have no free public search and block scraping, so the app does not fake it. It uses what you have set up, and the page shows which sources ran:
+
+- **YouTube Shorts** - free, always on, real view counts.
+- **Grok search** - uses your `XAI_API_KEY`; finds public TikTok / Instagram links (about $0.05 a search). TikTok links are verified; Instagram links are marked "not verified".
+- **Apify** (optional, `APIFY_TOKEN`) - real TikTok and Instagram search with view counts, paid to Apify.
+- **Paste a link** - always works; the app fills in the title and thumbnail for TikTok.
+
+**Copy this style** downloads the video with yt-dlp and builds a blueprint of its structure (never its words), about $0.01. TikTok usually downloads fine. Instagram often needs a login: set `COOKIES_FILE` in `.env` to an exported cookies.txt, or download the video yourself and upload it on the Format page.
 
 ## Your own voice (optional)
 On the Render tab choose **🎙 My own voice**, then record the script in the app (or upload a recording). The sound is cleaned up (hum, hiss, volume), then the app listens to it to place every word, so captions, page turns and scene timing follow your voice. It costs nothing and you can switch back to the AI voice any time. Each script keeps its own recording; if you edit the script afterwards you'll be asked to re-record.

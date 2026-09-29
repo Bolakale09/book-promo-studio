@@ -9,6 +9,7 @@ import streamlit as st
 
 from promo import storage
 from ui import common, theme
+from ui.discover_pages import viral_page
 from ui.grow_pages import brand_page, calendar_page, results_page
 from ui.create_pages import render_page, scripts_page, videos_page
 from ui.manage_pages import backup_page
@@ -74,6 +75,7 @@ common.PAGES.update({
     "book": st.Page(book_page, title="1 Book", icon="📘", url_path="book"),
     "characters": st.Page(characters_page, title="2 Characters", icon="🎭", url_path="characters"),
     "pages": st.Page(pages_page, title="3 Pages", icon="📖", url_path="pages"),
+    "viral": st.Page(viral_page, title="Viral finder", icon="🔥", url_path="viral"),
     "formats": st.Page(formats_page, title="4 Format", icon="🔁", url_path="format"),
     "scripts": st.Page(scripts_page, title="5 Scripts", icon="✍️", url_path="scripts"),
     "render": st.Page(render_page, title="6 Render", icon="🎬", url_path="render"),
@@ -86,7 +88,7 @@ common.PAGES.update({
 P = common.PAGES
 nav = st.navigation({
     "": [P["home"]],
-    "Set up": [P["book"], P["characters"], P["pages"], P["formats"], P["brand"]],
+    "Set up": [P["book"], P["characters"], P["pages"], P["viral"], P["formats"], P["brand"]],
     "Make": [P["scripts"], P["render"]],
     "Publish": [P["videos"], P["calendar"], P["results"]],
     "Other": [P["backup"]],

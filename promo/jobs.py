@@ -2,7 +2,7 @@
 browser refresh never cancels paid work.
 
 Kinds:
-  render / quick / redo      heavy (use the CPU): they wait in a queue and run one at a time
+  render / quick / redo / study   heavy (use the CPU): they wait in a queue and run one at a time
   scripts / variations / digest / portrait / desk      light (just API calls): run straight away
 """
 import json
@@ -17,10 +17,11 @@ from . import config
 
 JOBS_DIR = config.DATA / "jobs"
 STALE_SECONDS = 15 * 60  # no progress for this long = the worker died
-HEAVY = {"render", "quick", "redo"}
+HEAVY = {"render", "quick", "redo", "study"}
 LABELS = {"render": "Rendering", "quick": "Quick video", "redo": "Redoing a scene", "scripts": "Writing scripts",
           "variations": "Writing variations", "digest": "Reading the manuscript", "portrait": "Creating a portrait",
-          "desk": "Creating a desk photo", "kit": "Making the posting kit", "hooks": "Testing hooks"}
+          "desk": "Creating a desk photo", "kit": "Making the posting kit", "hooks": "Testing hooks",
+          "discover": "Searching for viral videos", "study": "Studying a video", "ideas": "Writing ideas"}
 
 
 def _write(d: Path, **status) -> None:
@@ -163,6 +164,21 @@ def _run(d: Path) -> None:
             from . import hooks
             n = hooks.run_lab(book, int(payload.get("n", 8)), payload.get("custom"), progress)
             result = f"{n} hooks tested"
+        elif kind == "discover":
+            from . import discover
+            data = discover.run_search(book, payload["keyword"], progress, payload.get("ideas", True))
+            result = f"{len(data['videos'])} videos found"
+        elif kind == "study":
+            from . import discover
+            discover.study(payload["url"], payload.get("stats"), progress)
+            result = "Style copied - saved as a format"
+        elif kind == "ideas":
+            from . import discover
+            found = discover.load(book["id"])
+            found["ideas"] = discover.make_ideas(book, payload["keyword"], found.get("videos") or [])
+            found["keyword"] = payload["keyword"]
+            discover.save(book["id"], found)
+            result = "Idea board"
         elif kind == "digest":
             bk.build_digest(book)
             result = "Manuscript read"

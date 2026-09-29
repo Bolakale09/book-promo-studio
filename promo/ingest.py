@@ -28,6 +28,9 @@ def download(url: str) -> Path:
         "quiet": True,
         "noplaylist": True,
     }
+    cookies = config.env("COOKIES_FILE")  # optional exported cookies.txt, for Instagram videos that need a login
+    if cookies and Path(cookies).exists():
+        opts["cookiefile"] = cookies
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     (folder / "info.json").write_text(json.dumps({
