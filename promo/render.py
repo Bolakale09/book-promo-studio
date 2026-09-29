@@ -368,53 +368,153 @@ class PageScene:
 
 
 class CoverScene:
-    """The physical book slides onto the desk, a light glints across the cover, the camera eases in."""
+    """The physical book is set down on the desk: it lowers into place in slight perspective, its shadow tightens
+    as it touches the table, light glints across the cover, the camera eases in."""
+
+    F = 0.955      # far (top) edge looks a little narrower: the camera is slightly in front of the book
+    V = 0.97       # slight foreshortening of the book's length
+    LIGHT = (0.55, 0.45)  # shadows fall toward the lower right (light from the upper left)
 
     def __init__(self, book: dict, desk: Image.Image, dur: float, seed: int):
-        self.dur = dur
-        self.angle = random.Random(seed).uniform(-4, -2)
-        obj = bk.book_object(book, width=int(CW * 0.6))
-        self.obj = obj.rotate(self.angle, resample=Image.BICUBIC, expand=True)
-        self.shadow = soft_shadow(obj.size, self.angle, blur=30 * S, strength=0.65)
-        self.desk = desk
-        self.rest = (CW / 2, CH * 0.5)
+        rnd = random.Random(seed)
+        self.dur, self.desk = dur, desk
+        self.angle = math.radians(rnd.uniform(-3.5, -1.2))
+        cover = bk.cover_image(book)
+        w = int(CW * 0.5)
+        h = int(cover.height * w / cover.width)
+        if h > CH * 0.56:
+            h = int(CH * 0.56)
+            w = int(cover.width * h / cover.height)
+        self.w, self.h = w, h
+        self.t = max(6, int(h * 0.028))           # thickness of the page block
+        self.cover = self._lit(cover.resize((w, h), Image.LANCZOS))
+        self.pages = self._page_edge(w, self.t * 3)
+        self.center = (CW / 2, CH * 0.52)
+        self.land = min(0.75, dur * 0.3)
         self.static = None
-        self.slide = min(0.6, dur * 0.25)
+        self.static_quad = None
 
-    def _compose(self, cy: float) -> Image.Image:
-        c = self.desk.copy()
-        darken(c, self.shadow, (self.rest[0] + 22 * S, cy + 34 * S))
-        c.paste(self.obj, (round(self.rest[0] - self.obj.width / 2), round(cy - self.obj.height / 2)), self.obj)
-        return c
-
-    def _glint(self, c: Image.Image, u: float) -> Image.Image:
-        w, h = self.obj.size
-        q = 4
-        band = Image.new("L", (w // q, h // q), 0)
-        x = (-w * 0.6 + u * w * 2.2) / q
-        ImageDraw.Draw(band).polygon([(x, 0), (x + w * 0.22 / q, 0), (x - w * 0.3 / q, h / q), (x - w * 0.52 / q, h / q)],
-                                     fill=70)
-        band = band.filter(ImageFilter.GaussianBlur(25 * S / q)).resize((w, h), Image.BILINEAR)
+    # ---- look ----
+    def _lit(self, cover: Image.Image) -> Image.Image:
+        """Match the cover to the photo: light falling from the upper left, a touch of the desk's colour,
+        a darker hinge by the spine, soft edges and photo grain - so it doesn't look pasted on."""
+        w, h = cover.size
         from PIL import ImageChops
-        band = ImageChops.multiply(band, self.obj.split()[3])
+        yy, xx = np.mgrid[0:h, 0:w]
+        diag = (xx / max(1, w - 1) + yy / max(1, h - 1)) / 2                          # 0 top-left .. 1 bottom-right
+        light = Image.fromarray((255 * (1.04 - 0.18 * diag) / 1.1).clip(0, 255).astype(np.uint8), "L")
+        lit = ImageChops.multiply(cover, Image.merge("RGB", [light] * 3))
+        lit = Image.eval(lit, lambda v: min(255, int(v * 1.1)))                        # undo the multiply's dimming
+        sample = self.desk.resize((16, 28), Image.BILINEAR).crop((3, 6, 13, 22))
+        tint = sample.resize((1, 1), Image.BILINEAR).getpixel((0, 0))
+        m = max(1, max(tint))
+        cast = Image.new("RGB", (w, h), tuple(int(200 + 55 * c / m) for c in tint))      # warm/cool cast of the room
+        lit = Image.blend(lit, ImageChops.multiply(lit, cast), 0.35)
+        hinge = Image.new("L", (w, h), 0)
+        hd = ImageDraw.Draw(hinge)
+        for x in range(int(w * 0.06)):
+            hd.line([(x, 0), (x, h)], fill=int(90 * (1 - x / (w * 0.06)) ** 1.5))
+        edge = Image.new("L", (w, h), 0)
+        ImageDraw.Draw(edge).rectangle((0, 0, w - 1, h - 1), outline=60, width=max(2, w // 220))
+        lit.paste((0, 0, 0), (0, 0), ImageChops.lighter(hinge, edge.filter(ImageFilter.GaussianBlur(2))))
+        grain = Image.effect_noise((w, h), 22).convert("RGB")
+        lit = Image.blend(lit, grain, 0.035).filter(ImageFilter.GaussianBlur(0.5))
+        return lit.convert("RGBA")
+
+    @staticmethod
+    def _page_edge(w: int, h: int) -> Image.Image:
+        """Cream page block with fine page lines, darker toward the table."""
+        img = Image.new("RGB", (w, h), (232, 224, 205))
+        d = ImageDraw.Draw(img)
+        rnd = random.Random(w)
+        for y in range(h):
+            shade = int(232 - 38 * y / h) - rnd.randint(0, 9)
+            d.line([(0, y), (w, y)], fill=(shade, shade - 7, shade - 20))
+        return img.convert("RGBA")
+
+    # ---- geometry ----
+    def _quad(self, scale: float, lift: float) -> list[tuple]:
+        """Top face of the book: far edge narrower (perspective), rotated a little, lifted toward the camera."""
+        hw, hh = self.w / 2 * scale, self.h / 2 * scale * self.V
+        pts = [(-hw * self.F, -hh), (hw * self.F, -hh), (hw, hh), (-hw, hh)]
+        ca, sa = math.cos(self.angle), math.sin(self.angle)
+        cx, cy = self.center[0], self.center[1] - lift
+        return [(cx + x * ca - y * sa, cy + x * sa + y * ca) for x, y in pts]
+
+    def _map(self, c: Image.Image, img: Image.Image, quad: list[tuple]) -> None:
+        xs, ys = [p[0] for p in quad], [p[1] for p in quad]
+        x0, y0 = math.floor(min(xs)), math.floor(min(ys))
+        bw, bh = math.ceil(max(xs)) - x0, math.ceil(max(ys)) - y0
+        W_, H_ = img.size
+        piece = img.transform((bw, bh), Image.PERSPECTIVE,
+                              persp_coeffs([(x - x0, y - y0) for x, y in quad], [(0, 0), (W_, 0), (W_, H_), (0, H_)]),
+                              Image.BICUBIC)
+        c.paste(piece, (x0, y0), piece)
+
+    def _shadow(self, c: Image.Image, poly: list[tuple], blur: float, alpha: int) -> None:
+        q = 4
+        xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+        pad = blur * 3 + 10
+        x0, y0 = int(min(xs) - pad), int(min(ys) - pad)
+        mw, mh = int(max(xs) + pad) - x0, int(max(ys) + pad) - y0
+        m = Image.new("L", (mw // q + 1, mh // q + 1), 0)
+        ImageDraw.Draw(m).polygon([((x - x0) / q, (y - y0) / q) for x, y in poly], fill=alpha)
+        m = m.filter(ImageFilter.GaussianBlur(max(0.5, blur / q))).resize((mw, mh), Image.BILINEAR)
+        c.paste((0, 0, 0), (x0, y0, x0 + mw, y0 + mh), m)
+
+    def _compose(self, z: float) -> tuple[Image.Image, list]:
+        """z = height above the desk, 0 (resting) .. 1 (just picked up)."""
+        c = self.desk.copy()
+        rest = self._quad(1.0, 0)
+        t = self.t
+        footprint = rest[:2] + [(rest[2][0], rest[2][1] + t), (rest[3][0], rest[3][1] + t)]
+        lx, ly = self.LIGHT
+        # soft shadow cast away from the light; further and softer the higher the book is
+        off = (self.w * (0.03 + 0.1 * z) * lx / 0.55, self.h * (0.025 + 0.08 * z) * ly / 0.45)
+        self._shadow(c, [(x + off[0], y + off[1]) for x, y in footprint], blur=(14 + 50 * z) * S,
+                     alpha=int(150 * (1 - 0.45 * z)))
+        # tight contact shadow where the book touches the table (fades in as it lands)
+        if z < 0.35:
+            k = 1 - z / 0.35
+            self._shadow(c, [(x + 1.5 * S, y + 2.5 * S) for x, y in footprint], blur=4 * S, alpha=int(210 * k))
+        quad = self._quad(1 + 0.1 * z, lift=CH * 0.02 * z)
+        tl, tr, br, bl = quad
+        tz = t * (1 + 0.1 * z)
+        self._map(c, self.pages, [bl, br, (br[0], br[1] + tz), (bl[0], bl[1] + tz)])     # page block (near edge)
+        self._map(c, self.cover, quad)                                                  # the cover
+        return c, quad
+
+    def _glint(self, c: Image.Image, quad: list, u: float) -> Image.Image:
+        q = 4
+        xs, ys = [p[0] for p in quad], [p[1] for p in quad]
+        x0, y0 = int(min(xs)), int(min(ys))
+        w, h = int(max(xs)) - x0, int(max(ys)) - y0
+        from PIL import ImageChops
+        shape = Image.new("L", (w // q + 1, h // q + 1), 0)
+        ImageDraw.Draw(shape).polygon([((x - x0) / q, (y - y0) / q) for x, y in quad], fill=255)
+        band = Image.new("L", shape.size, 0)
+        bx = (-w * 0.6 + u * w * 2.2) / q
+        ImageDraw.Draw(band).polygon([(bx, 0), (bx + w * 0.2 / q, 0), (bx - w * 0.3 / q, h / q),
+                                      (bx - w * 0.5 / q, h / q)], fill=46)
+        band = ImageChops.multiply(band.filter(ImageFilter.GaussianBlur(22 * S / q)), shape)
+        band = band.resize((w, h), Image.BILINEAR)
         c = c.copy()
-        c.paste(Image.new("RGB", band.size, (255, 255, 255)),
-                (round(self.rest[0] - w / 2), round(self.rest[1] - h / 2)), band)
+        c.paste((255, 250, 240), (x0, y0, x0 + w, y0 + h), band)
         return c
 
     def frame(self, t: float) -> Image.Image:
-        u = ease_out(t / self.slide) if self.slide > 0 else 1.0
+        u = ease_out(t / self.land) if self.land > 0 else 1.0
         if u < 1:
-            c = self._compose(self.rest[1] + (1 - u) * CH * 0.75)
+            c, _ = self._compose(1 - u)
         else:
             if self.static is None:
-                self.static = self._compose(self.rest[1])
+                self.static, self.static_quad = self._compose(0.0)
             c = self.static
-            g0 = self.slide + 0.3
-            if g0 <= t <= g0 + 0.9:
-                c = self._glint(c, (t - g0) / 0.9)
-        z = 1.02 + 0.1 * ease((t - self.slide) / max(0.5, self.dur - self.slide))
-        return camera(c, z, self.rest[0], self.rest[1], t)
+            g0 = self.land + 0.35
+            if g0 <= t <= g0 + 1.0:
+                c = self._glint(c, self.static_quad, (t - g0) / 1.0)
+        zoom = 1.02 + 0.1 * ease((t - self.land) / max(0.5, self.dur - self.land))
+        return camera(c, zoom, self.center[0], self.center[1], t)
 
 
 class StillScene:

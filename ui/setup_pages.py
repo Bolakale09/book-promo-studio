@@ -196,12 +196,17 @@ def book_page() -> None:
             bg = bk.path(b, "background")
             if bg and bg.exists():
                 c1.image(str(bg))
+                if b.get("background_v", 0) < visuals.OVERHEAD_DESK and b.get("background", "").startswith("img_"):
+                    st.info("💡 This desk photo was made with the old angled style, so your book and pages can look "
+                            "pasted on. Click **New AI desk photo**: new ones are shot from directly above, so "
+                            "everything lies naturally on the table.")
             else:
                 c1.caption("Plain wood until you add a desk photo (made automatically on first render).")
-            if c2.button(f"✨ AI desk photo ({money(image_price())})", width="stretch",
-                         disabled=bool(jobs.active(b["id"], {"desk"}))):
+            if c2.button(f"✨ {'New ' if bg and bg.exists() else ''}AI desk photo ({money(image_price())})",
+                         width="stretch", disabled=bool(jobs.active(b["id"], {"desk"}))):
                 start_task("desk", b["id"], "Desk photo")
-            up = c2.file_uploader("…or upload a desk photo", ["png", "jpg", "jpeg"], key=f"bg_{b['id']}")
+            up = c2.file_uploader("…or upload your own photo, taken from directly above", ["png", "jpg", "jpeg"],
+                                  key=f"bg_{b['id']}")
             if up and c2.button("Use photo"):
                 b["background"] = save_upload(up, bk.book_dir(b["id"]), "background")
                 bk.save(b)

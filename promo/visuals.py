@@ -89,13 +89,19 @@ def make_character_reference(book: dict, char: dict) -> Path:
     return img
 
 
+OVERHEAD_DESK = 2  # desk photos shot from directly above, so books and pages lie on them naturally
+
+
 def make_background(book: dict) -> Path:
     world = (book.get("digest") or {}).get("visual_world", "")
-    img = ai_image("Top-down photo of an empty wooden reading desk, warm lamp light, a coffee mug and a pen at the "
-                   f"edges, the centre left empty for a book. Mood: {world[:200]}", bk.book_dir(book["id"]))
-    book["background"] = img.name
+    img = ai_image("Flat lay photo shot from directly above (camera pointing straight down, no perspective, no "
+                   "horizon): an empty wooden desk surface filling the whole frame, soft natural window light from "
+                   "the upper left, a coffee mug, a pen and a small plant only at the very edges, the large centre "
+                   f"completely empty for a book to be placed. Realistic wood grain, gentle shadows. Mood: {world[:200]}",
+                   bk.book_dir(book["id"]))
+    book["background"], book["background_v"] = img.name, OVERHEAD_DESK
     fresh = bk.load(book["id"])  # keep edits made while the photo was being created
-    fresh["background"] = img.name
+    fresh["background"], fresh["background_v"] = img.name, OVERHEAD_DESK
     bk.save(fresh)
     return img
 

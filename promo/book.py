@@ -374,6 +374,22 @@ def vignette(img: Image.Image) -> Image.Image:
     return Image.composite(img, dark, mask)
 
 
+def cover_image(book: dict) -> Image.Image:
+    """The front cover as uploaded, or a clean title cover if there is none."""
+    cov = path(book, "cover")
+    if cov and cov.exists():
+        return Image.open(cov).convert("RGB")
+    cover = Image.new("RGB", (600, 900), (40, 50, 70))
+    d = ImageDraw.Draw(cover)
+    for y in range(900):
+        d.line([(0, y), (600, y)], fill=(36 + y // 60, 46 + y // 55, 70 + y // 40))
+    d.multiline_text((300, 430), textwrap.fill(book.get("title", ""), 14), font=font("Georgia", 58),
+                     fill=(245, 236, 215), anchor="mm", align="center", spacing=14)
+    if book.get("author"):
+        d.text((300, 800), book["author"], font=font("serif", 30), fill=(230, 200, 140), anchor="mm")
+    return cover
+
+
 def book_object(book: dict, width: int = 700) -> Image.Image:
     """3D-looking book (RGBA): page block, spine shading and gloss. Place it on the desk with paste_with_shadow."""
     cov = path(book, "cover")
