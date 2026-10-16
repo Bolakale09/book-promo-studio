@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 from PIL import Image, ImageDraw
 
-from promo import analyze, book as bk, brand, budget, config, hooks as hooklib, jobs, myvoice, render, results, script, voice
+from promo import analyze, book as bk, brand, budget, config, hooks as hooklib, jobs, myvoice, render, results, script, ugc as ugclib, voice
 from promo.genres import GENRES, default_blueprint
 
 from . import theme as t
@@ -109,6 +109,14 @@ def scripts_page() -> None:
 
         names = [c["name"] for c in b.get("characters", [])]
         feats = b.get("featured") or []
+        style_pick = st.segmented_control(
+            "Video style", list(ugclib.STYLES.values()), default=ugclib.STYLES["polished"], key="script_style",
+            help="Polished = cinematic narration. UGC = sounds and looks like a real reader filmed it on their phone: "
+                 "casual first-person lines, quick jump cuts, handheld sway, phone-camera colour and grain.")
+        style = "ugc" if style_pick == ugclib.STYLES["ugc"] else "polished"
+        if style == "ugc":
+            st.caption("📱 UGC: casual first-person lines in short 1.5-3 s shots, real-life footage, a phone-camera "
+                       "look when rendered. The narrator is also made more casual.")
         c1, c2 = st.columns(2)
         focus_chars = c1.multiselect("Characters to feature", names, disabled=free_only or not names,
                                      placeholder="Add characters in step 2" if not names else "Any")
@@ -130,7 +138,7 @@ def scripts_page() -> None:
                 "args": {"n": int(n), "max_ai_video": max_ai_video, "notes": notes,
                          "has_broll": bool(render._broll_clips(b)), "has_stock": bool(config.PEXELS_API_KEY),
                          "focus_characters": focus_chars, "focus_pages": [feats[i] for i in focus_pages],
-                         "free_only": free_only}})
+                         "free_only": free_only, "style": style}})
         task_panel(b["id"], {"scripts", "variations", "hooks"})
 
     scripts = script.load_scripts(b["id"])
@@ -280,6 +288,11 @@ def render_page() -> None:
                 if up and st.button("Save track", type="primary"):
                     (config.MUSIC_DIR / Path(up.name).name).write_bytes(up.getbuffer())
                     st.rerun()
+            is_ugc_script = v.get("style") == "ugc"
+            ugc_on = st.toggle("📱 UGC phone look (handheld, jump-cut punch-ins, grain, casual narrator)",
+                               is_ugc_script, key=f"ugc_look_{v.get('id', '')}",
+                               help="Makes the picture look filmed on a phone and the narrator sound like a friend. "
+                                    "Music is kept quiet. Works best with UGC-style scripts.")
             c1, c2 = st.columns(2)
             captions = c1.toggle("Captions", True)
             page_sound = c2.toggle("Page-turn sound", True)
@@ -317,7 +330,7 @@ def render_page() -> None:
             over = est["total"] > left_budget
             opts = {"voice_name": vname, "captions": captions, "music": music,
                     "music_volume": vol, "page_sound": page_sound, "quality_check": quality,
-                    "video_retries": video_retries, "draft": draft, "use_brand": use_brand,
+                    "video_retries": video_retries, "draft": draft, "use_brand": use_brand, "ugc": ugc_on,
                     "own_voice": str(own_path) if own_path and not own_problem else None}
             blocked = own_mode and (own_path is None or bool(own_problem))
             label = ("➕ Add to render queue" if busy else "🎬 Render video") + (" (draft)" if draft else "")

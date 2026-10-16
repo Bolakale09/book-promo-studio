@@ -1,7 +1,7 @@
 """Write video scripts for the book from a blueprint + genre preset + book digest."""
 import json
 
-from . import book as bk, llm
+from . import book as bk, llm, ugc
 from .genres import FIVE_RULES, GENRES
 
 VISUAL_TYPES = {
@@ -81,8 +81,9 @@ def allowed_visuals(book: dict, max_ai_video: int = 1, has_broll: bool = False, 
 
 def generate(book: dict, blueprint: dict, n: int = 5, max_ai_video: int = 1, notes: str = "",
              has_broll: bool = False, has_stock: bool = True, focus_characters: list[str] | None = None,
-             focus_pages: list[dict] | None = None, free_only: bool = False) -> list[dict]:
+             focus_pages: list[dict] | None = None, free_only: bool = False, style: str = "polished") -> list[dict]:
     g = GENRES[book["genre"]]
+    is_ugc = style == "ugc"
     allowed = allowed_visuals(book, max_ai_video, has_broll, has_stock, free_only)
     focus = ""
     if focus_characters and "character" in allowed:
@@ -108,6 +109,7 @@ BLUEPRINT TO FOLLOW (structure, pacing, hook mechanic, ending - NOT its words):
 
 THE 5 RULES:
 {FIVE_RULES}
+{ugc.SCRIPT_RULES.format(title=book['title']) if is_ugc else ''}
 
 VISUAL TYPES YOU MAY USE:
 {json.dumps(allowed, indent=1)}
@@ -134,6 +136,8 @@ weakest (the first one will be rendered automatically). Return JSON:
     variants = out.get("variants", [])
     for v in variants:
         _clean(book, v, allowed)
+        if is_ugc:
+            v["style"] = "ugc"
     return variants
 
 
@@ -186,6 +190,8 @@ Return JSON: {{"variants": [ ... ]}}"""
     variants = out.get("variants", [])
     for v in variants:
         _clean(book, v, allowed)
+        if winner.get("style"):
+            v["style"] = winner["style"]
     return variants
 
 

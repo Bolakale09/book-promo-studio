@@ -59,6 +59,11 @@ TikTok and Instagram have no free public search and block scraping, so the app d
 
 **Copy this style** downloads the video with yt-dlp and builds a blueprint of its structure (never its words), about $0.01. TikTok usually downloads fine. Instagram often needs a login: set `COOKIES_FILE` in `.env` to an exported cookies.txt, or download the video yourself and upload it on the Format page.
 
+## UGC style (real-person feel)
+On the Scripts page choose **Video style: 📱 UGC**. The AI then writes like a real reader sending a voice note: first-person, casual, a reaction-led hook, one honest detail, a real page as proof, a casual breadcrumb, in quick 1.5-3 s shots with everyday real-life footage.
+When rendering, the **📱 UGC phone look** switch (on by default for UGC scripts) gives the picture a handheld phone feel: gentle camera sway, jump-cut punch-ins on alternate shots, warm phone-camera colour, grain and a soft vignette. The narrator is told to sound like a friend, AI photos are asked for in a phone-photo look, and music is kept quiet (max 15%). Captions and your brand watermark stay crisp. It is a look applied to the same footage - there is still no on-camera person. Costs nothing extra; drawing takes slightly longer per frame.
+**⚡ Quick video** has the same UGC switch.
+
 ## Your own voice (optional)
 On the Render tab choose **🎙 My own voice**, then record the script in the app (or upload a recording). The sound is cleaned up (hum, hiss, volume), then the app listens to it to place every word, so captions, page turns and scene timing follow your voice. It costs nothing and you can switch back to the AI voice any time. Each script keeps its own recording; if you edit the script afterwards you'll be asked to re-record.
 

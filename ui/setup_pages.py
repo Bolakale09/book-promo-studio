@@ -116,6 +116,7 @@ def quick_video_card(b: dict) -> None:
                        "renders the strongest one - all in the background. Fine-tune later in Scripts.")
             mix = st.segmented_control("Visual mix", list(QUICK_MIXES), default="⚖️ Balanced", key="quick_mix",
                                        label_visibility="collapsed") or "⚖️ Balanced"
+            ugc_quick = st.toggle("📱 UGC style (real-person, phone-shot feel)", False, key="quick_ugc")
             draft = st.toggle("Draft quality (720p, about twice as fast)", False, key="quick_draft")
         free_only, max_ai_video = QUICK_MIXES[mix]
         low, high = (0.02, 0.06) if free_only else (0.05, 0.6)
@@ -127,7 +128,8 @@ def quick_video_card(b: dict) -> None:
                 from promo import config as cfg
                 start_task("quick", b["id"], "Quick video", {
                     "args": {"n": 3, "max_ai_video": max_ai_video, "free_only": free_only,
-                             "has_broll": bool(render._broll_clips(b)), "has_stock": bool(cfg.PEXELS_API_KEY)},
+                             "has_broll": bool(render._broll_clips(b)), "has_stock": bool(cfg.PEXELS_API_KEY),
+                             "style": "ugc" if ugc_quick else "polished"},
                     "options": {"quality_check": True, "draft": draft}},
                     note="Quick video started - it will appear in Videos in a few minutes")
         task_panel(b["id"], {"quick"})

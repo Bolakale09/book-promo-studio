@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
-from . import book as bk, brand, budget, config, ffmpeg_utils as ff, music as musiclib, myvoice, qa, sfx, visuals, voice
+from . import book as bk, brand, budget, config, ffmpeg_utils as ff, music as musiclib, myvoice, qa, sfx, ugc as ugclib, visuals, voice
 from .genres import GENRES
 from .transcribe import align_words
 
@@ -843,7 +843,8 @@ AI_KINDS = ("ai_image", "character", "ai_video")
 
 
 def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path, warn, progress,
-                 check: bool = False, image_tries: int = 2, video_tries: int = 1, reports: list | None = None):
+                 check: bool = False, image_tries: int = 2, video_tries: int = 1, reports: list | None = None,
+                 ugc: bool = False):
     """Make the picture for one scene. With `check`, every AI shot is reviewed and re-made until it looks real."""
     vis, dur = s.get("visual", "cover"), s["dur"]
     seed = seed_for(book["id"], idx, s.get("prompt", ""), s.get("page", ""))
@@ -876,6 +877,8 @@ def build_source(book: dict, s: dict, idx: int, desk: Image.Image, assets: Path,
             prompt, refs = visuals.character_prompt(book, s["character"], prompt)
         elif s.get("character"):
             refs = visuals.character_prompt(book, s["character"], "")[1]
+        if ugc and not s.get("_fixed_prompt"):
+            prompt += ugclib.PHOTO_SUFFIX
         base = s.get("_take", 0)
 
         def shot(gen, kind, tries, what):
@@ -933,6 +936,8 @@ def _segment(s: dict, idx: int, f0: int, f1: int, cap, out: Path, tick) -> None:
             for f in range(f0, max(f1, f0 + 1)):
                 lt = (f - f0) / FPS
                 frame = s["src"].frame(lt)
+                if s.get("look") is not None:
+                    frame = s["look"](frame, f / FPS, idx)
                 if s.get("ov_img") is not None:
                     paste_center(frame, s["ov_img"], s["ov_y"], min(1.0, (lt + 0.02) / 0.15))
                 if s.get("footer") is not None:
@@ -1001,15 +1006,19 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
            music: Path | str | None = None, music_volume: float = 0.25, page_sound: bool = True,
            quality_check: bool = True, video_retries: int = 1, draft: bool = False,
            progress=lambda msg, frac=None: None, redo_of: str | None = None,
-           own_voice: Path | str | None = None, use_brand: bool = True) -> Path:
+           own_voice: Path | str | None = None, use_brand: bool = True, ugc: bool | None = None) -> Path:
     g = GENRES[book["genre"]]
+    if ugc is None:
+        ugc = variant.get("style") == "ugc"
+    if ugc:
+        music_volume = min(music_volume, 0.15)  # UGC: the voice carries it, music stays under
     use_size(draft)
     music_file = musiclib.resolve(music)
     own = Path(own_voice) if own_voice and Path(own_voice).exists() else None
     options = {"voice_name": voice_name, "captions": captions, "music": str(music) if music_file else None,
                "music_volume": music_volume, "page_sound": page_sound, "quality_check": quality_check,
                "video_retries": video_retries, "draft": draft, "own_voice": str(own) if own else None,
-               "use_brand": use_brand}
+               "use_brand": use_brand, "ugc": ugc}
     scenes = [dict(s) for s in variant.get("scenes", []) if s]
     if not scenes:
         raise ValueError("This script has no scenes.")
@@ -1028,7 +1037,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         progress(msg)
 
     voice_name = voice_name or voice.default_voice(book["genre"])
-    total, clips, words = plan_timeline(scenes, voice_name, g["voice_instructions"], assets, progress, book["genre"],
+    total, clips, words = plan_timeline(scenes, voice_name, ugclib.VOICE if ugc else g["voice_instructions"], assets, progress, book["genre"],
                                         own)
 
     progress("Setting up the desk...")
@@ -1039,7 +1048,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
             warn(f"Could not create the AI desk photo ({str(e)[:120]}); using a plain wood background.")
     desk = desk_canvas(book)
     qa_reports: list[dict] = []
-    make = dict(check=quality_check, video_tries=video_retries, reports=qa_reports)
+    make = dict(check=quality_check, video_tries=video_retries, reports=qa_reports, ugc=ugc)
     for i, s in enumerate(scenes):
         progress(f"Preparing scene {i + 1}/{len(scenes)} ({s.get('visual')})...", 0.05 + 0.25 * i / len(scenes))
         s["src"] = build_source(book, s, i, desk, assets, warn, progress, **make)
@@ -1050,7 +1059,9 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
     cap_font = brand.caption_font(g["caption_font"], kit)
     mark = brand.watermark((W, H), K, kit)
     poetic = book["genre"] == "poetry"
+    look = ugclib.PhoneLook(W, H, seed_for(book["id"], variant.get("name", "")), FPS) if ugc else None
     for i, s in enumerate(scenes):
+        s["look"] = look
         ov = (s.get("overlay") or "").strip()
         if kit["cta"] and kit["cta_on_end"] and i == len(scenes) - 1:
             ov = kit["cta"].strip()
@@ -1121,7 +1132,7 @@ def render(book: dict, variant: dict, voice_name: str | None = None, captions: b
         "book": book["id"], "variant": {k: v for k, v in variant.items()},
         "timeline": [{k: s[k] for k in ("beat", "visual", "start", "dur") if k in s} for s in scenes],
         "seconds": round(total, 2), "voice": "My own voice" if own else (voice_name or g["voice"]),
-        "captions": captions, "own_voice": bool(own), "music": music_label, "cost": round(budget.spent_this_month() - spent_before, 4),
+        "captions": captions, "own_voice": bool(own), "ugc": ugc, "music": music_label, "cost": round(budget.spent_this_month() - spent_before, 4),
         "warnings": warnings, "file": final.name,
         "quality": {"shots": qa_reports, "final": final_check} if quality_check else None,
         "options": options, "draft": draft, "redo_of": redo_of,
