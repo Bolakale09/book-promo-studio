@@ -493,8 +493,13 @@ def results_page() -> None:
             go("render")
         return
     k = results.kpis(rs)
+    series, run = [], 0.0
+    for r in reversed(rs):  # oldest first -> cumulative views
+        if r["logged"]:
+            run += r["views"] or 0
+            series.append(run)
+    t.metric("Total views", f"{k['views']:,.0f}", f"across {k['logged']} video(s) · avg {k['avg_views']:,.0f} each", series)
     t.stats([("Videos", f"{k['made']}", f"{k['logged']} with numbers"),
-             ("Total views", f"{k['views']:,.0f}", f"avg {k['avg_views']:,.0f} per video"),
              ("Best video", f"{k['best']['views']:,.0f}" if k["best"] else "-", (k["best"]["name"][:30] if k["best"] else "log some views")),
              ("Engagement", f"{k['engagement'] * 100:.1f}%" if k["engagement"] is not None else "-",
               "likes+comments+shares+saves per view"),

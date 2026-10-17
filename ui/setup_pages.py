@@ -23,25 +23,31 @@ def home() -> None:
     done = sum(s["done"] for s in required)
     nxt = next((s for s in steps if not s["done"] and not s.get("optional")), None)
 
-    uri = t.img_uri(bk.path(b, "cover"), 200)
-    cover = f'<img src="{uri}">' if uri else f'<div class="bps-cover-ph">{t.GENRE_ICON[b["genre"]]}</div>'
+    uri = t.img_uri(bk.path(b, "cover"), 360)
     ms = bk.path(b, "manuscript")
     meta = " · ".join(x for x in [b.get("author"), f"{bk.page_count(b)} pages" if ms and ms.exists() else "",
                                   f"sells on {b.get('where_to_buy') or 'Amazon'}"] if x)
-    t.md(f'<div class="bps-hero">{cover}<div style="flex:1"><div class="bps-eyebrow">Your book</div>'
-         f'<h2>{t.esc(b["title"])}</h2><div class="meta">{t.esc(meta)}</div>'
-         f'{t.chip(t.GENRE_ICON[b["genre"]] + " " + g["label"], "gold")}{t.chip("~" + str(g["target_seconds"]) + "s videos")}'
-         f'{t.chip("🎙 " + voice.default_voice(b["genre"]) + " voice")}'
-         f'<div style="margin-top:.9rem;max-width:420px"><div class="bps-muted">Set-up {done}/{len(required)} steps</div>'
-         f'{t.bar(done / len(required))}</div></div></div>')
+    t.hero(uri, t.GENRE_ICON[b["genre"]], "Your book", b["title"], meta,
+           t.chip(t.GENRE_ICON[b["genre"]] + " " + g["label"], "gold") + t.chip("~" + str(g["target_seconds"]) + "s videos")
+           + t.chip("🎙 " + voice.default_voice(b["genre"]) + " voice"), done, len(required))
 
     scripts = script.load_scripts(b["id"])
     renders = render.list_renders(b["id"])
     best = max((r.get("views") or 0 for r in renders), default=0)
-    from promo import budget
-    t.stats([("Scripts", str(len(scripts)), "ready to render"), ("Videos", str(len(renders)), "rendered"),
-             ("Best views", f"{best:,}", "log views in Videos"),
-             ("Spent this month", money(budget.spent_this_month()), f"of {money(config.MONTHLY_BUDGET_USD)}")])
+    top = max(renders, key=lambda r: r.get("views") or 0, default=None) if best else None
+    t.momentum(("Best video" if best else "Your first win", f"{best:,}" if best else "0",
+                (top["variant"].get("name", "")[:34] + " · views") if top else "log views in Videos to track it",
+                "▲ TOP" if best else ""),
+               [("Scripts", str(len(scripts)), "ready to render"), ("Videos", str(len(renders)), "rendered")])
+    if nxt:
+        if st.button(f"Next: {nxt['label']} →", type="primary", width="stretch", key="home_next"):
+            go(nxt["page"])
+    else:
+        c1, c2 = st.columns(2)
+        if c1.button("✍️ Write more scripts", type="primary", width="stretch", key="home_more"):
+            go("scripts")
+        if c2.button("🎬 Render a video", width="stretch", key="home_render"):
+            go("render")
     from promo import schedule
     due = schedule.due(schedule.load(b["id"]))
     if due:
@@ -55,8 +61,7 @@ def home() -> None:
 
     left, right = st.columns([5, 4], gap="large")
     with left:
-        with st.container(border=True):
-            st.markdown("#### Your workflow")
+        with st.expander(f"Your journey · {done} of {len(required)} steps", expanded=False):
             rows = []
             for i, s in enumerate(steps, 1):
                 cls = "done" if s["done"] else ("next" if s is nxt else "")
@@ -65,16 +70,6 @@ def home() -> None:
                 rows.append(f'<div class="bps-check {cls}"><div class="dot">{mark}</div>'
                             f'<div class="lbl">{t.esc(s["label"])}</div>{opt}</div>')
             t.md("".join(rows))
-            st.write("")
-            if nxt:
-                if st.button(f"Next: {nxt['label']} →", type="primary", width="stretch"):
-                    go(nxt["page"])
-            else:
-                c1, c2 = st.columns(2)
-                if c1.button("✍️ Write more scripts", type="primary", width="stretch"):
-                    go("scripts")
-                if c2.button("🎬 Render a video", width="stretch"):
-                    go("render")
 
     with right:
         with st.container(border=True):

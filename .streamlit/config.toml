@@ -9,16 +9,16 @@ toolbarMode = "minimal"
 
 [theme]
 base = "dark"
-primaryColor = "#F0B429"
-backgroundColor = "#0E0F13"
-secondaryBackgroundColor = "#181A23"
-textColor = "#ECE7DF"
+primaryColor = "#FF5A36"
+backgroundColor = "#0B0B14"
+secondaryBackgroundColor = "#14141F"
+textColor = "#F5F2EA"
 borderColor = "#2A2D38"
-linkColor = "#F7D27A"
+linkColor = "#FF9A7A"
 font = "Inter, 'Segoe UI', sans-serif"
 headingFont = "Fraunces, Georgia, serif"
-baseRadius = "10px"
-buttonRadius = "10px"
+baseRadius = "14px"
+buttonRadius = "14px"
 showWidgetBorder = true
 
 [theme.sidebar]
