@@ -20,6 +20,24 @@ def test_user_text_is_escaped(monkeypatch):
     assert "<script>" not in html and "<b>x</b>" not in html and "<img>" not in html
 
 
+def test_android_app_is_detected_from_user_agent(monkeypatch):
+    from types import SimpleNamespace
+    out = []
+    monkeypatch.setattr(theme.st, "markdown", lambda html, **k: out.append(html))
+    monkeypatch.setattr(theme.st, "context", SimpleNamespace(headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14)"}))
+    assert not theme.in_app()
+    theme.inject()
+    monkeypatch.setattr(theme.st, "context", SimpleNamespace(headers={"User-Agent": "Mozilla/5.0 BookPromoStudioApp/1"}))
+    assert theme.in_app()
+    theme.inject()
+    assert theme.APP_CSS not in out[0] and theme.APP_CSS in out[1]
+
+
+def test_in_app_is_false_outside_a_request(monkeypatch):
+    monkeypatch.setattr(theme.st, "context", None)  # .headers raises -> treated as a normal browser
+    assert theme.in_app() is False
+
+
 def test_timeline_has_one_cell_per_scene():
     html = theme.timeline([{"visual": "stock", "voiceover": "one two three four five six seven"},
                            {"visual": "cover", "seconds": 3}])

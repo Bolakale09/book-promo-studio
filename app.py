@@ -2,6 +2,7 @@
 
 Run with:  run.bat   (or: .venv\\Scripts\\streamlit run app.py)
 """
+import hashlib
 import hmac
 import os
 
@@ -19,6 +20,11 @@ st.set_page_config(page_title="Book Promo Studio", page_icon="📚", layout="wid
 theme.inject()
 
 
+def app_token(pw: str) -> str:
+    """What the Android app stores as the `bps_token` cookie instead of the password itself."""
+    return hmac.new(pw.encode(), b"book-promo-studio-app", hashlib.sha256).hexdigest()
+
+
 def password_gate() -> None:
     """On the web, only people with APP_PASSWORD can use the app (and spend the API credits)."""
     pw = os.getenv("APP_PASSWORD", "")
@@ -29,6 +35,13 @@ def password_gate() -> None:
             st.stop()
         return
     if st.session_state.get("authed"):
+        return
+    try:
+        token = st.context.cookies.get("bps_token") or ""
+    except Exception:
+        token = ""
+    if token and hmac.compare_digest(token.encode(), app_token(pw).encode()):
+        st.session_state["authed"] = True  # signed in from the Android app
         return
     _, mid, _ = st.columns([1, 1.2, 1])
     with mid:
@@ -92,7 +105,7 @@ nav = st.navigation({
     "Make": [P["scripts"], P["render"]],
     "Publish": [P["videos"], P["calendar"], P["results"]],
     "Other": [P["backup"]],
-}, position="top")
+}, position="hidden" if theme.in_app() else "top")  # the Android app draws its own tabs
 common.sidebar()
 try:
     nav.run()

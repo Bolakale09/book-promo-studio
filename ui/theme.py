@@ -209,8 +209,32 @@ header[data-testid="stHeader"] { background: rgba(11,11,20,.62) !important; back
 """
 
 
+APP_UA = "BookPromoStudioApp"  # the Android app adds this to its User-Agent
+
+# Inside the Android app the native top bar and bottom tabs replace Streamlit's header and menu.
+APP_CSS = """
+<style>
+header[data-testid="stHeader"] { display: none !important; }
+.block-container { padding-top: 1.4rem !important; padding-bottom: 2.5rem !important; }
+[data-testid="stAppDeployButton"], [data-testid="stMainMenu"], [data-testid="stToolbarActions"] { display: none !important; }
+[data-testid="stAppViewContainer"]::before { filter: blur(28px); animation: none; }
+[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-secondary"] { min-height: 2.9rem; }
+.bps-hero2 { margin-top: 4.4rem; }
+* { -webkit-tap-highlight-color: transparent; }
+</style>
+"""
+
+
+def in_app() -> bool:
+    """True when the page is shown inside the Book Promo Studio Android app."""
+    try:
+        return APP_UA in (st.context.headers.get("User-Agent") or "")
+    except Exception:
+        return False
+
+
 def inject() -> None:
-    st.markdown(CSS, unsafe_allow_html=True)
+    st.markdown(CSS + (APP_CSS if in_app() else ""), unsafe_allow_html=True)
 
 
 def esc(s) -> str:

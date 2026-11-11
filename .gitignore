@@ -10,3 +10,14 @@ __pycache__/
 # your books, manuscripts, renders, spending log
 data/
 .streamlit/secrets.toml
+
+# Android build output and signing keys
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.jks
+*.p12
+*.keystore
