@@ -47,7 +47,12 @@ class StudioWeb(private val act: MainActivity) {
 
     private var token: String? = null
     private var host = ""
+    private var appBase = ""          // where the Streamlit app itself is served
+    private var appSeen = false       // the studio reported it has drawn (onReady) since the last openApp()
+    private var wakeTried = false     // already went through Cloud's page once to wake a sleeping app
+    private var openGen = 0
     private var loadGen = 0
+    private val isCloud get() = host == "streamlit.app" || host.endsWith(".streamlit.app")
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private val main = Handler(Looper.getMainLooper())
     private val hookJs = HOOK_JS.replace("__KNOWN__", JSONArray(Tab.allPaths).toString())
@@ -84,10 +89,31 @@ class StudioWeb(private val act: MainActivity) {
             if (token != null) "bps_token=$token; Path=/; Max-Age=31536000$secure" else "bps_token=; Path=/; Max-Age=0",
         )
         cookies.flush()
+        // Streamlit Community Cloud wraps the app in a frame on its own page, and inside a WebView that frame
+        // stays 150px tall. "/~/+/" is the app itself, full height and without Cloud's buttons.
+        appBase = if (isCloud) "$url~/+/" else url
+        wakeTried = false
+        openApp()
+    }
+
+    private fun openApp() {
         error = null
         ready = false
+        appSeen = false
         path = ""
-        view.loadUrl(url)
+        val t = token
+        view.loadUrl(if (t != null) "$appBase?bps_token=$t" else appBase)
+        if (isCloud) {
+            // A sleeping Cloud app never draws at "/~/+/". Its normal page has the wake-up button; once the
+            // app shows up in that page's frame, the hook calls onWrapped() and we come back here.
+            val gen = ++openGen
+            main.postDelayed({
+                if (gen == openGen && !appSeen && !wakeTried && error == null) {
+                    wakeTried = true
+                    loadedUrl?.let { view.loadUrl(it) }
+                }
+            }, 15_000)
+        }
     }
 
     fun retry() {
@@ -105,7 +131,7 @@ class StudioWeb(private val act: MainActivity) {
         if (target == path && ready) return
         path = target
         view.evaluateJavascript("window.__bpsGo ? window.__bpsGo(${JSONObject.quote(target)}) : false") { r ->
-            if (r != "true") loadedUrl?.let { view.loadUrl(it + target) }
+            if (r != "true" && appBase.isNotEmpty()) view.loadUrl(appBase + target)
         }
     }
 
@@ -255,7 +281,16 @@ class StudioWeb(private val act: MainActivity) {
 
         @JavascriptInterface
         fun onReady() {
-            main.post { if (error == null) ready = true }
+            main.post {
+                appSeen = true
+                if (error == null) ready = true
+            }
+        }
+
+        /** The studio appeared inside Streamlit Cloud's frame (it just woke up): open it directly instead. */
+        @JavascriptInterface
+        fun onWrapped() {
+            main.post { if (isCloud) openApp() }
         }
 
         @JavascriptInterface
@@ -291,10 +326,15 @@ class StudioWeb(private val act: MainActivity) {
                 }
                 return null;
               }
-              var last = null, ready = false;
+              var last = null, ready = false, wrapped = false;
+              var onCloud = (location.hostname + '/').indexOf('.streamlit.app/') >= 0;
               function tick() {
                 var w = appWin();
                 if (!w) return;
+                if (w !== window && onCloud) {
+                  if (!wrapped) { wrapped = true; BPSApp.onWrapped(); }
+                  return;
+                }
                 if (!ready) {
                   var m = w.document.querySelector('[data-testid="stMainBlockContainer"]');
                   if (m && m.children.length) { ready = true; BPSApp.onReady(); }

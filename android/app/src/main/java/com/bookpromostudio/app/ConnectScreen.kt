@@ -130,7 +130,7 @@ fun ConnectScreen(
             problem = "That doesn't look like a web address."
             return
         }
-        val pw = password.ifEmpty { null }
+        val pw = password.trim().ifEmpty { null }  // keyboards often add a trailing space
         if (force) return onConnect(url, pw)
         checking = true
         problem = null
@@ -195,7 +195,7 @@ fun ConnectScreen(
                         value = address,
                         onValueChange = { address = it; problem = null },
                         label = { Text("Studio address") },
-                        placeholder = { Text("your-app.streamlit.app") },
+                        placeholder = { Text("YOUR-APP-NAME.streamlit.app") },
                         leadingIcon = { Icon(Icons.Rounded.Language, null) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
@@ -271,7 +271,7 @@ fun ConnectScreen(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 HelpRow(
                     Icons.Rounded.Cloud, "On the web",
-                    "Your Streamlit Community Cloud link, like https://book-promo.streamlit.app",
+                    "Your Streamlit Community Cloud link, like https://YOUR-APP-NAME.streamlit.app (find it at share.streamlit.io)",
                 )
                 HelpRow(
                     Icons.Rounded.Computer, "On your PC",
@@ -313,9 +313,9 @@ private fun reach(url: String): String? = try {
         instanceFollowRedirects = true
         setRequestProperty("User-Agent", APP_UA)
     }
-    conn.responseCode
+    val code = conn.responseCode
     conn.disconnect()
-    null
+    if (code == 404) "Nothing is at $url - check the spelling. Your address is in share.streamlit.io (web) or the run.bat window (PC)." else null
 } catch (e: Exception) {
     "Couldn't reach $url. Check the address and that the studio is running."
 }

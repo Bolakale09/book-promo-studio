@@ -1,4 +1,6 @@
 """Shared helpers: current book, navigation between steps, sidebar, settings + spending dialogs."""
+import hashlib
+import hmac
 import importlib
 import os
 import re
@@ -62,6 +64,26 @@ def video_src(path: str | Path, download_name: str | None = None) -> str | None:
         return storage.remote_url(p, download_name)
     except Exception:
         return None
+
+
+def app_token(pw: str) -> str:
+    """What the Android app sends instead of the password itself (android/.../Prefs.kt makes the same HMAC)."""
+    return hmac.new(pw.encode(), b"book-promo-studio-app", hashlib.sha256).hexdigest()
+
+
+def app_signed_in(pw: str) -> bool:
+    """True if the Android app sent a valid token, in the address (?bps_token=) or as a cookie."""
+    token = st.query_params.get("bps_token") or ""
+    if "bps_token" in st.query_params:
+        del st.query_params["bps_token"]  # keep it out of the address bar and history
+    if not token:
+        try:
+            token = st.context.cookies.get("bps_token") or ""
+        except Exception:
+            token = ""
+    if not isinstance(token, str):  # e.g. no real browser request behind this session
+        token = ""
+    return bool(token) and hmac.compare_digest(token.encode(), app_token(pw).encode())
 
 
 def go(key: str, **state) -> None:
